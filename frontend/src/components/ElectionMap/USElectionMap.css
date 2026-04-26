@@ -1,0 +1,469 @@
+/**
+ * US ELECTION MAP 2024 - CSS
+ * ==========================
+ */
+
+.election-map-container {
+  width: 100%;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* Loading State */
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 1rem;
+}
+
+.loading-state .spinner {
+  width: 60px;
+  height: 60px;
+  border: 4px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.loading-sub {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.9rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Error State */
+.error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 1rem;
+  text-align: center;
+}
+
+.error-state h2 {
+  color: #ff6b6b;
+}
+
+/* Header */
+.map-header {
+  padding: 1.5rem 2rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.header-title h1 {
+  font-size: 1.75rem;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.header-title .subtitle {
+  margin: 0.25rem 0 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.9rem;
+}
+
+/* Electoral Summary */
+.electoral-summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  margin-top: 1.5rem;
+}
+
+.candidate-box {
+  text-align: center;
+  padding: 1rem 2rem;
+  border-radius: 12px;
+  min-width: 200px;
+  position: relative;
+}
+
+.candidate-box.gop {
+  background: linear-gradient(135deg, rgba(232, 27, 35, 0.3) 0%, rgba(232, 27, 35, 0.1) 100%);
+  border: 2px solid #E81B23;
+}
+
+.candidate-box.dem {
+  background: linear-gradient(135deg, rgba(0, 21, 188, 0.3) 0%, rgba(0, 21, 188, 0.1) 100%);
+  border: 2px solid #0015BC;
+}
+
+.candidate-name {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.electoral-votes {
+  font-size: 3rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.candidate-box.gop .electoral-votes { color: #E81B23; }
+.candidate-box.dem .electoral-votes { color: #0015BC; }
+
+.popular-votes {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.7);
+  margin-top: 0.5rem;
+}
+
+.winner-badge {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  background: #FFD700;
+  color: #000;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.electoral-bar {
+  flex: 1;
+  max-width: 400px;
+}
+
+.bar-container {
+  height: 30px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 15px;
+  overflow: hidden;
+  display: flex;
+  position: relative;
+}
+
+.bar-fill {
+  height: 100%;
+  transition: width 0.5s ease;
+}
+
+.bar-fill.gop { background: #E81B23; }
+.bar-fill.dem { background: #0015BC; position: absolute; }
+
+.bar-label {
+  text-align: center;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 0.5rem;
+}
+
+/* Map Controls */
+.map-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.view-toggle {
+  display: flex;
+  gap: 0;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.toggle-btn {
+  padding: 0.5rem 1.5rem;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.toggle-btn.active {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-weight: 600;
+}
+
+.zoom-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.zoom-controls button {
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 1.2rem;
+  transition: all 0.2s;
+}
+
+.zoom-controls button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Map Wrapper */
+.map-wrapper {
+  flex: 1;
+  position: relative;
+  min-height: 500px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.map-wrapper svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Tooltip */
+.map-tooltip {
+  position: fixed;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  min-width: 220px;
+  pointer-events: none;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.tooltip-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tooltip-header strong {
+  font-size: 1rem;
+}
+
+.electoral-badge {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+.tooltip-results {
+  margin: 0.5rem 0;
+}
+
+.result-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 0;
+  font-size: 0.85rem;
+}
+
+.result-row.gop { color: #ff6b6b; }
+.result-row.dem { color: #6b9dff; }
+
+.tooltip-winner {
+  text-align: center;
+  padding: 0.5rem;
+  margin-top: 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.tooltip-winner.gop {
+  background: rgba(232, 27, 35, 0.3);
+  color: #ff6b6b;
+}
+
+.tooltip-winner.dem {
+  background: rgba(0, 21, 188, 0.3);
+  color: #6b9dff;
+}
+
+/* Legend */
+.map-legend {
+  position: absolute;
+  bottom: 2rem;
+  left: 2rem;
+  background: rgba(0, 0, 0, 0.8);
+  padding: 1rem;
+  border-radius: 8px;
+  z-index: 100;
+}
+
+.legend-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.legend-gradient {
+  width: 200px;
+  height: 12px;
+  background: linear-gradient(to right, #0015BC, #7B9CD4, #E5E7EB, #E08080, #E81B23);
+  border-radius: 6px;
+}
+
+.legend-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 0.25rem;
+}
+
+/* States Sidebar */
+.states-sidebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 200px;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  overflow-y: auto;
+  z-index: 100;
+}
+
+.states-sidebar h3 {
+  padding: 1rem;
+  margin: 0;
+  background: rgba(0, 0, 0, 0.3);
+  font-size: 0.9rem;
+  position: sticky;
+  top: 0;
+}
+
+.states-list {
+  padding: 0.5rem;
+}
+
+.state-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+  font-size: 0.85rem;
+}
+
+.state-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.state-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.winner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.winner-dot.gop { background: #E81B23; }
+.winner-dot.dem { background: #0015BC; }
+
+.state-ev {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.75rem;
+}
+
+/* Buttons */
+.btn {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-primary {
+  background: #E81B23;
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: #c41820;
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .states-sidebar {
+    display: none;
+  }
+  
+  .electoral-summary {
+    flex-direction: column;
+    gap: 1rem;
+  }
+  
+  .electoral-bar {
+    order: 3;
+    max-width: 100%;
+    width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .map-header {
+    padding: 1rem;
+  }
+  
+  .header-title h1 {
+    font-size: 1.25rem;
+  }
+  
+  .candidate-box {
+    min-width: 150px;
+    padding: 0.75rem 1rem;
+  }
+  
+  .electoral-votes {
+    font-size: 2rem;
+  }
+  
+  .map-controls {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  
+  .map-legend {
+    left: 1rem;
+    bottom: 1rem;
+    padding: 0.75rem;
+  }
+  
+  .legend-gradient {
+    width: 150px;
+  }
+}

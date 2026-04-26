@@ -1,0 +1,51 @@
+.home-hero {
+  font-size: 1.125rem;
+  max-width: 800px;
+  margin: 1rem auto 2rem;
+}
+
+.home-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.home-actions .btn {
+  font-size: 1.125rem;
+}
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin-top: 2rem;
+}
+
+.how-it-works {
+  margin-top: 2rem;
+}
+
+.how-step {
+  display: grid;
+  gap: 2rem;
+  margin-top: 1.5rem;
+}
+
+.how-step-item {
+  margin-bottom: 1.5rem;
+}
+
+.how-step-title {
+  color: var(--primary);
+  margin-bottom: 0.5rem;
+}
+
+.security-list {
+  margin-top: 1rem;
+  padding-left: 1.5rem;
+}
+
+.security-list li {
+  margin-bottom: 0.5rem;
+}

@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: trustless_voting
+    ports:
+      - '5432:5432'
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://postgres:password@db:5432/trustless_voting?schema=public
+      JWT_SECRET: 3OZB9I2t3H2q7z6G5Q1m8D9n2P1u7y4A5b6C7d8E9f0A1b2C3d4E5f6G7h8I9
+      JWT_EXPIRES_IN: 24h
+      COOKIE_SECRET: 8mTQ9c3r2P1L7n4V5x2Z9k3J8s1A6b4C7d2E9f5G1h8I3j7K2l6M9n4P5q1R7s3
+      CORS_ORIGIN: http://localhost:5173
+      GOVERNANCE_APP_URL: http://localhost:5173
+      TRUST_PROXY: 'true'
+    ports:
+      - '3000:3000'
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: /api
+    ports:
+      - '5173:80'
+    depends_on:
+      - backend
+
+volumes:
+  db_data:
