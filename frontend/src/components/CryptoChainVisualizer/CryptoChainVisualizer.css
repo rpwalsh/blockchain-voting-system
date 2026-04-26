@@ -1,0 +1,377 @@
+/**
+ * CryptoChainVisualizer Styles
+ * Beautiful animated visualization of cryptographic operations
+ */
+
+.crypto-chain-visualizer {
+  max-width: 900px;
+  margin: 2rem auto;
+  padding: 2rem;
+  background: linear-gradient(135deg, rgba(44, 62, 80, 0.95), rgba(52, 73, 94, 0.95));
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  color: #ecf0f1;
+}
+
+.chain-header {
+  text-align: center;
+  margin-bottom: 3rem;
+  padding-bottom: 2rem;
+  border-bottom: 2px solid rgba(52, 152, 219, 0.3);
+}
+
+.chain-header h2 {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+  background: linear-gradient(135deg, #3498db, #2ecc71);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.chain-icon {
+  font-size: 2.5rem;
+  display: inline-block;
+  margin-right: 0.5rem;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.chain-subtitle {
+  color: #95a5a6;
+  font-size: 0.95rem;
+  margin-top: 0.5rem;
+}
+
+.chain-steps {
+  position: relative;
+}
+
+.chain-step {
+  display: flex;
+  gap: 1.5rem;
+  padding: 1.5rem 0;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.chain-step:hover {
+  transform: translateX(8px);
+}
+
+.chain-step.active {
+  animation: stepActivate 0.6s ease-out;
+}
+
+@keyframes stepActivate {
+  0% { opacity: 0; transform: translateY(20px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.chain-step.past .step-icon {
+  background: linear-gradient(135deg, #2ecc71, #27ae60);
+  box-shadow: 0 0 20px rgba(46, 204, 113, 0.5);
+}
+
+.step-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.step-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #34495e, #2c3e50);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.8rem;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s ease;
+  z-index: 2;
+  position: relative;
+}
+
+.chain-step.processing .step-icon {
+  animation: processing 1s ease-in-out infinite;
+  background: linear-gradient(135deg, #f39c12, #e67e22);
+  box-shadow: 0 0 25px rgba(243, 156, 18, 0.6);
+}
+
+@keyframes processing {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.1); }
+}
+
+.chain-step.complete .step-icon {
+  background: linear-gradient(135deg, #2ecc71, #27ae60);
+  animation: checkmark 0.6s ease-out;
+}
+
+@keyframes checkmark {
+  0% { transform: scale(0.5); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.step-line {
+  width: 3px;
+  flex-grow: 1;
+  background: linear-gradient(180deg, rgba(52, 152, 219, 0.3), rgba(52, 152, 219, 0.1));
+  margin: 0.5rem 0;
+  position: relative;
+}
+
+.chain-step.complete .step-line {
+  background: linear-gradient(180deg, rgba(46, 204, 113, 0.6), rgba(46, 204, 113, 0.2));
+}
+
+.chain-step.processing .step-line {
+  background: linear-gradient(180deg, rgba(243, 156, 18, 0.6), rgba(243, 156, 18, 0.2));
+  animation: lineProgress 1s ease-in-out infinite;
+}
+
+@keyframes lineProgress {
+  0% { transform: scaleY(0); transform-origin: top; }
+  100% { transform: scaleY(1); transform-origin: top; }
+}
+
+.step-line.last {
+  background: transparent;
+}
+
+.step-content {
+  flex-grow: 1;
+  background: rgba(44, 62, 80, 0.5);
+  padding: 1.5rem;
+  border-radius: 12px;
+  border: 1px solid rgba(52, 152, 219, 0.2);
+  transition: all 0.3s ease;
+}
+
+.chain-step:hover .step-content {
+  border-color: rgba(52, 152, 219, 0.5);
+  box-shadow: 0 8px 25px rgba(52, 152, 219, 0.15);
+}
+
+.chain-step.complete .step-content {
+  border-color: rgba(46, 204, 113, 0.4);
+}
+
+.step-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.step-header h3 {
+  font-size: 1.15rem;
+  color: #3498db;
+  margin: 0;
+}
+
+.chain-step.complete .step-header h3 {
+  color: #2ecc71;
+}
+
+.step-status {
+  font-size: 0.9rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  background: rgba(52, 73, 94, 0.6);
+  font-weight: 600;
+}
+
+.status-pending {
+  color: #95a5a6;
+}
+
+.status-processing {
+  color: #f39c12;
+  animation: blink 1s ease-in-out infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.status-complete, .status-verified {
+  color: #2ecc71;
+}
+
+.step-description {
+  color: #bdc3c7;
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.step-meta {
+  display: flex;
+  gap: 2rem;
+  font-size: 0.85rem;
+  color: #7f8c8d;
+}
+
+.step-meta strong {
+  color: #95a5a6;
+}
+
+.step-details {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(52, 152, 219, 0.2);
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.detail-box {
+  flex: 1;
+  background: rgba(44, 62, 80, 0.8);
+  padding: 1rem;
+  border-radius: 8px;
+  border-left: 3px solid #3498db;
+}
+
+.detail-box strong {
+  display: block;
+  color: #3498db;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.detail-box code {
+  display: block;
+  color: #2ecc71;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.detail-arrow {
+  font-size: 2rem;
+  color: #3498db;
+  flex-shrink: 0;
+}
+
+.chain-footer {
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 2px solid rgba(52, 152, 219, 0.3);
+}
+
+.security-guarantees h3 {
+  color: #3498db;
+  font-size: 1.3rem;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.security-guarantees ul {
+  list-style: none;
+  padding: 0;
+}
+
+.security-guarantees li {
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  background: rgba(44, 62, 80, 0.5);
+  border-radius: 8px;
+  border-left: 4px solid #2ecc71;
+  color: #bdc3c7;
+  line-height: 1.5;
+}
+
+.security-guarantees li strong {
+  color: #2ecc71;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .crypto-chain-visualizer {
+    padding: 1.5rem;
+  }
+
+  .chain-header h2 {
+    font-size: 1.5rem;
+  }
+
+  .step-icon {
+    width: 50px;
+    height: 50px;
+    font-size: 1.5rem;
+  }
+
+  .step-content {
+    padding: 1rem;
+  }
+
+  .step-meta {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .step-details {
+    flex-direction: column;
+  }
+
+  .detail-arrow {
+    transform: rotate(90deg);
+  }
+}
+
+/* Dark mode enhancement */
+@media (prefers-color-scheme: dark) {
+  .crypto-chain-visualizer {
+    background: linear-gradient(135deg, rgba(26, 32, 44, 0.98), rgba(33, 43, 54, 0.98));
+  }
+
+  .step-content {
+    background: rgba(26, 32, 44, 0.6);
+  }
+
+  .detail-box {
+    background: rgba(26, 32, 44, 0.9);
+  }
+}
+
+/* Print styles */
+@media print {
+  .crypto-chain-visualizer {
+    background: white;
+    color: black;
+    box-shadow: none;
+  }
+
+  .step-icon {
+    filter: grayscale(1);
+  }
+
+  .step-details {
+    page-break-inside: avoid;
+  }
+}

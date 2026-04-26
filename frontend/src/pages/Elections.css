@@ -1,0 +1,67 @@
+.elections-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+.election-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+
+.election-card-header h3 {
+  margin-bottom: 0;
+}
+
+.election-dates {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+}
+
+.election-dates div {
+  margin-bottom: 0.25rem;
+}
+
+.election-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+}
+
+.stat-box {
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.election-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.election-actions .btn {
+  flex: 1;
+}
+
+@media (max-width: 768px) {
+  .elections-grid {
+    grid-template-columns: 1fr;
+  }
+}

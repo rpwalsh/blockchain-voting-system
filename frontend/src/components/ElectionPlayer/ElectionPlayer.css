@@ -1,0 +1,736 @@
+/**
+ * ELECTION PLAYER 2024 - STYLES
+ * ==============================
+ */
+
+.player-container {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Loading & Error States */
+.loading-state,
+.error-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  text-align: center;
+}
+
+.loading-state .spinner {
+  width: 60px;
+  height: 60px;
+  border: 4px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-state h2,
+.error-state h2 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.loading-state p,
+.error-state p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Header */
+.player-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem 2rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.header-left h1 {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.header-left .subtitle {
+  margin: 0.25rem 0 0;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Electoral Display */
+.electoral-display {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.electoral-display .candidate {
+  text-align: center;
+  min-width: 120px;
+}
+
+.electoral-display .candidate .name {
+  display: block;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.8);
+  margin-bottom: 0.25rem;
+}
+
+.electoral-display .candidate .ev {
+  display: block;
+  font-size: 2.5rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.electoral-display .candidate.gop .ev { color: #E81B23; }
+.electoral-display .candidate.dem .ev { color: #0015BC; }
+
+.ev-bar {
+  width: 300px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.ev-fill {
+  height: 100%;
+  position: absolute;
+  top: 0;
+  transition: width 0.5s ease;
+}
+
+.ev-fill.gop {
+  background: linear-gradient(90deg, #E81B23, #ff4d4d);
+  left: 0;
+  border-radius: 12px 0 0 12px;
+}
+
+.ev-fill.dem {
+  background: linear-gradient(90deg, #0015BC, #4d7aff);
+  right: 0;
+  border-radius: 0 12px 12px 0;
+}
+
+.ev-marker {
+  position: absolute;
+  top: 50%;
+  left: 50.2%;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 255, 255, 0.9);
+  color: #000;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Main Content */
+.player-main {
+  display: flex;
+  flex: 1;
+  gap: 0;
+}
+
+.map-container {
+  flex: 1;
+  position: relative;
+  min-height: 500px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.map-container svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Map Tooltip */
+.map-tooltip {
+  position: fixed;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  min-width: 200px;
+  pointer-events: none;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.map-tooltip strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.map-tooltip .ev-badge {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  margin-left: 0.5rem;
+}
+
+.map-tooltip .tooltip-results {
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+}
+
+.map-tooltip .result.gop { color: #ff6b6b; }
+.map-tooltip .result.dem { color: #6b9dff; }
+
+.map-tooltip .winner {
+  text-align: center;
+  padding: 0.4rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.map-tooltip .winner.gop {
+  background: rgba(232, 27, 35, 0.3);
+  color: #ff6b6b;
+}
+
+.map-tooltip .winner.dem {
+  background: rgba(0, 21, 188, 0.3);
+  color: #6b9dff;
+}
+
+/* Sidebar */
+.player-sidebar {
+  width: 350px;
+  background: rgba(0, 0, 0, 0.3);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.panel {
+  padding: 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.panel h3 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Vote Panel */
+.vote-totals {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.vote-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.vote-row .label {
+  flex: 1;
+  font-weight: 500;
+}
+
+.vote-row .votes {
+  font-family: 'Monaco', 'Consolas', monospace;
+  font-size: 0.9rem;
+}
+
+.vote-row .percent {
+  font-weight: 700;
+  min-width: 55px;
+  text-align: right;
+}
+
+.vote-row.gop .label,
+.vote-row.gop .percent { color: #ff6b6b; }
+
+.vote-row.dem .label,
+.vote-row.dem .percent { color: #6b9dff; }
+
+.vote-bar {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.bar-fill.gop { background: #E81B23; }
+.bar-fill.dem { background: #0015BC; }
+
+.total-votes {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  text-align: center;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.9rem;
+}
+
+/* Counties Panel */
+.counties-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.county-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  border-left: 3px solid transparent;
+}
+
+.county-item.gop { border-left-color: #E81B23; }
+.county-item.dem { border-left-color: #0015BC; }
+
+.county-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.county-name {
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.county-state {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.county-result {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.no-data {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  padding: 2rem;
+}
+
+/* Controls */
+.player-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 2rem;
+  background: rgba(0, 0, 0, 0.4);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.progress-section {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+  min-width: 200px;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar .progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4ade80, #22c55e);
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.7);
+  min-width: 100px;
+}
+
+.control-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn {
+  padding: 0.6rem 1.25rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-play {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: white;
+}
+
+.btn-play:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.4);
+}
+
+.btn-pause {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: white;
+}
+
+.btn-pause:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+}
+
+.btn-reset {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.btn-reset:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.btn-reset:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: white;
+}
+
+.speed-section {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.speed-section label {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.speed-buttons {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.speed-btn {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.2s;
+}
+
+.speed-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.speed-btn.active {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .player-main {
+    flex-direction: column;
+  }
+  
+  .player-sidebar {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  
+  .panel {
+    min-width: 300px;
+    border-bottom: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+  }
+}
+
+@media (max-width: 768px) {
+  .player-header {
+    flex-direction: column;
+    text-align: center;
+  }
+  
+  .electoral-display {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  
+  .ev-bar {
+    width: 100%;
+    max-width: 300px;
+    order: 3;
+  }
+  
+  .player-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .control-buttons {
+    justify-content: center;
+  }
+  
+  .speed-section {
+    justify-content: center;
+  }
+}
+
+/* ============================================
+   CRYPTO DASHBOARD PANEL
+   ============================================ */
+
+.crypto-panel {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1));
+  border-left: 3px solid #8b5cf6;
+}
+
+.crypto-toggle {
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.crypto-toggle:hover {
+  color: #a78bfa;
+}
+
+.crypto-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.crypto-loading {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.6);
+  font-style: italic;
+}
+
+/* Comparison Section */
+.crypto-comparison {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.comparison-header {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.comparison-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.5rem;
+}
+
+.comparison-row:last-child {
+  margin-bottom: 0;
+}
+
+.comparison-label {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.comparison-value {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.comparison-value.bad {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.comparison-value.good {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+
+/* Features Grid */
+.crypto-features {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.crypto-feature {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+
+.crypto-feature:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.feature-icon {
+  font-size: 1.1rem;
+  width: 28px;
+  text-align: center;
+}
+
+.feature-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.feature-name {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.feature-detail {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Live Demos */
+.crypto-demos {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.demos-header {
+  font-weight: 600;
+  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
+  color: #a78bfa;
+}
+
+.demo-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.3rem 0;
+  font-size: 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.demo-item:last-child {
+  border-bottom: none;
+}
+
+.demo-name {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.demo-time {
+  color: #22c55e;
+  font-family: 'Monaco', 'Consolas', monospace;
+  font-size: 0.7rem;
+}
+
+/* Guarantees */
+.crypto-guarantees {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.guarantee {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.guarantee-check {
+  color: #22c55e;
+  font-weight: bold;
+}
+
+/* Refresh Button */
+.btn-crypto-refresh {
+  width: 100%;
+  padding: 0.5rem;
+  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-crypto-refresh:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+}
+
+.btn-crypto-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -1,0 +1,90 @@
+.subtitle {
+  font-size: 1.125rem;
+  color: var(--text-secondary);
+  max-width: 800px;
+  margin: 1rem auto 2rem;
+  text-align: center;
+}
+
+.demo-step {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+  padding: 1.5rem;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border-left: 4px solid var(--primary);
+}
+
+.step-number {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary);
+  color: white;
+  border-radius: 50%;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.step-content {
+  flex: 1;
+}
+
+.step-content h3 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  color: var(--text-primary);
+}
+
+.step-content p {
+  margin-bottom: 1rem;
+  color: var(--text-secondary);
+}
+
+.button-group {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.card-info {
+  background: rgba(37, 99, 235, 0.05);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+}
+
+.feature-list {
+  margin-top: 1rem;
+  padding-left: 1.5rem;
+}
+
+.feature-list li {
+  margin-bottom: 0.75rem;
+  color: var(--text-primary);
+}
+
+.feature-list strong {
+  color: var(--primary);
+}
+
+@media (max-width: 768px) {
+  .demo-step {
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .step-number {
+    align-self: flex-start;
+  }
+
+  .button-group {
+    flex-direction: column;
+  }
+
+  .button-group .btn {
+    width: 100%;
+  }
+}

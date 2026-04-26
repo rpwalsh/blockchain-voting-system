@@ -1,0 +1,776 @@
+// SPDX-License-Identifier: LicenseRef-Proprietary
+// Copyright (c) 2026 blockchain-voting-system.
+// Proprietary and confidential. Unauthorized use, copying, or distribution is prohibited.
+
+// ENTERPRISE MULTI-TENANT VOTING PLATFORM
+// ========================================
+// Series A Ready: Corporate, Federal, Municipal, Project Management
+// Security Level: Nation-state + Enterprise + Regulatory compliance
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// MULTI-TENANT ARCHITECTURE
+// ============================================================================
+
+// Organization: Top-level tenant (government, corporation, NGO)
+model Organization {
+  id              String   @id @default(uuid())
+  name            String   // "US Federal Government", "Acme Corp"
+  slug            String   @unique // URL-safe identifier
+  type            String   // FEDERAL|STATE|MUNICIPAL|CORPORATE|PROJECT|BOARD
+  tier            String   @default("ENTERPRISE") // FREE|STARTER|ENTERPRISE|UNLIMITED
+  status          String   @default("ACTIVE") // ACTIVE|SUSPENDED|TRIAL|CANCELLED
+  
+  // Contact
+  primaryContact  String
+  email           String
+  phone           String?
+  website         String?
+  
+  // Billing
+  billingEmail    String?
+  subscriptionId  String?
+  monthlyVoters   Int      @default(0)
+  maxVoters       Int      @default(10000) // Tier limit
+  
+  // Security
+  publicKey       String   // Org-level signing key
+  apiKey          String   @unique // API access
+  webhookUrl      String?  // Event notifications
+  ipWhitelist     String?  // JSON array of allowed IPs
+  
+  // Audit
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdBy       String?  // Level 12 admin who created it
+  
+  // Relations
+  elections       Election[]
+  users           User[]
+  auditLogs       AuditLog[]
+  securityEvents  SecurityEvent[]
+  settings        OrganizationSettings?
+  authProviders   OrganizationAuthProvider[]
+  members         Member[]
+  eligibilityRules EligibilityRule[]
+  electorateSnapshots ElectorateSnapshot[]
+  
+  @@index([slug])
+  @@index([type])
+  @@index([status])
+}
+
+// User: Organization members (election officials, admins, voters)
+model User {
+  id              String    @id @default(uuid())
+  organizationId  String
+  
+  // Identity
+  email           String
+  username        String    // Can be duplicate across orgs
+  passwordHash    String?   // bcrypt cost 12+ (null for SSO-only users)
+  firstName       String?
+  lastName        String?
+  
+  // Role-based access control
+  role            String    @default("VIEWER") // SUPER_ADMIN|ORG_ADMIN|ELECTION_OFFICER|AUDITOR|VOTER|VIEWER
+  permissions     String?   // JSON array of granular permissions
+  
+  // Security
+  publicKey       String?   // User signing key
+  mfaSecret       String?   // TOTP secret (encrypted)
+  mfaEnabled      Boolean   @default(false)
+  mfaBackupCodes  String?   // Encrypted backup codes
+  
+  // Session management
+  lastLoginAt     DateTime?
+  lastLoginIp     String?   // Hashed
+  sessionToken    String?   // Current session
+  sessionExpiry   DateTime?
+  
+  // Rate limiting / security
+  failedAttempts  Int       @default(0)
+  lockedUntil     DateTime?
+  
+  // Audit
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  isActive        Boolean   @default(true)
+  
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  @@unique([organizationId, email])
+  @@index([email])
+  @@index([role])
+  @@index([isActive])
+}
+
+// ============================================================================
+// BLOCKCHAIN-VOTING-SYSTEM GOVERNANCE + TENANT CONFIG
+// ============================================================================
+
+model OrganizationSettings {
+  id                String   @id @default(uuid())
+  organizationId    String   @unique
+
+  // Product mode
+  mode              String   @default("GOVERNANCE") // GOVERNANCE|ELECTIONS_ONLY|CUSTOM
+  tenantMode        String   @default("MULTI") // SINGLE|MULTI
+
+  // Auth
+  authMode          String   @default("LOCAL") // LOCAL|OIDC
+  requireMfaAdmins  Boolean  @default(false)
+  allowSelfJoin     Boolean  @default(false)
+  selfJoinDomain    String?  // Optional domain allowlist
+
+  // Branding
+  brandName         String?  // Display name override
+  brandLogoUrl      String?
+  brandPrimaryColor String?  // Hex
+
+  // Compliance posture
+  complianceProfile String   @default("GOVERNMENT") // GOVERNMENT|ENTERPRISE|COMMUNITY
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model OrganizationAuthProvider {
+  id              String   @id @default(uuid())
+  organizationId  String
+
+  type            String   // OIDC
+  name            String   // "Okta", "AzureAD", "Auth0", "Google"
+  enabled         Boolean  @default(true)
+
+  // OIDC configuration
+  issuerUrl       String
+  clientId        String
+  clientSecret    String
+  redirectUri     String
+  scopes          String   @default("openid profile email")
+
+  // Claim mapping
+  emailClaim      String?  @default("email")
+  subjectClaim    String?  @default("sub")
+  rolesClaim      String?  // Optional
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([enabled])
+}
+
+model Member {
+  id              String   @id @default(uuid())
+  organizationId  String
+
+  // Imported roster identifiers
+  externalId      String
+  email           String?
+  displayName     String?
+
+  // Eligibility flags (union-friendly)
+  duesCurrent     Boolean  @default(false)
+  unit            String?
+  worksite        String?
+  roles           String?  // JSON array (steward, officer, etc)
+  metadata        String?  // JSON
+
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  snapshotLinks   SnapshotMember[]
+
+  @@unique([organizationId, externalId])
+  @@index([organizationId])
+  @@index([duesCurrent])
+  @@index([isActive])
+}
+
+model EligibilityRule {
+  id              String   @id @default(uuid())
+  organizationId  String
+
+  name            String
+  expression      String   // JSON expression (portable, white-boxable)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  snapshots       ElectorateSnapshot[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model ElectorateSnapshot {
+  id                String   @id @default(uuid())
+  organizationId    String
+  electionId        String   @unique
+  eligibilityRuleId String?
+
+  // Reproducibility
+  snapshotHash      String
+  memberCount       Int
+  reportJson        String
+
+  createdAt         DateTime @default(now())
+
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  election          Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  eligibilityRule   EligibilityRule? @relation(fields: [eligibilityRuleId], references: [id], onDelete: SetNull)
+  members           SnapshotMember[]
+
+  @@index([organizationId])
+}
+
+model SnapshotMember {
+  snapshotId  String
+  memberId    String
+
+  snapshot    ElectorateSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  member      Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@id([snapshotId, memberId])
+  @@index([memberId])
+}
+
+// Level 12 Super Admin (YOU - system-wide god mode)
+model SuperAdmin {
+  id              String    @id @default(uuid())
+  username        String    @unique // "admin"
+  passwordHash    String    // Ultra-secure
+  totpSecret      String    // Mandatory MFA
+  
+  // Security
+  publicKey       String
+  lastLoginAt     DateTime?
+  lastLoginIp     String?
+  sessionToken    String?
+  
+  // Emergency access log
+  accessLog       String?   // JSON array of all actions
+  
+  createdAt       DateTime  @default(now())
+  
+  @@index([username])
+}
+
+// ============================================================================
+// ELECTION SYSTEM (Universal: Federal, Corporate, Project, Board)
+// ============================================================================
+
+model Election {
+  id              String   @id @default(uuid())
+  organizationId  String
+  
+  // Basic info
+  name            String
+  description     String?
+  type            String   // FEDERAL|STATE|LOCAL|CORPORATE_BOARD|SHAREHOLDER|PROJECT|POLL
+  category        String?  // Presidential, Board Election, Feature Vote, etc
+  
+  // Dates
+  startDate       DateTime
+  endDate         DateTime
+  status          String   @default("DRAFT") // DRAFT|REGISTRATION|VOTING|TALLYING|COMPLETED|CANCELLED|DISPUTED
+  
+  // Cryptography
+  publicKey       String   // Election public key
+  privateKeyHash  String   // Verify without storing plaintext
+  privateKey      String   // ENCRYPTED with HSM/KMS + Shamir split
+  keyShares       String?  // JSON of threshold key shares
+  
+  // Blockchain anchoring
+  merkleRoot      String?
+  blockchainTx    String?  // Ethereum/Hyperledger transaction hash
+  blockchainBlock Int?     // Block number
+  
+  // Configuration
+  allowAnonymous  Boolean  @default(true)  // Anonymous voting
+  requireId       Boolean  @default(true)  // ID verification
+  multipleChoice  Boolean  @default(false) // Allow multiple votes
+  ranked          Boolean  @default(false) // Ranked choice voting
+  weighted        Boolean  @default(false) // Weighted votes (corporate shares)
+  
+  // Statistics (cached for performance)
+  registrationCount Int @default(0)
+  voteCount         Int @default(0)
+  
+  // Audit
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdBy       String?  // User ID
+  lastMerkleUpdate DateTime?
+  
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  electorateSnapshot ElectorateSnapshot?
+  candidates      Candidate[]
+  voters          Voter[]
+  votes           Vote[]
+  tallyResults    TallyResult[]
+  ledgerEntries   LedgerEntry[]
+  
+  @@index([organizationId])
+  @@index([status])
+  @@index([type])
+  @@index([startDate, endDate])
+}
+
+model Candidate {
+  id              String   @id @default(uuid())
+  electionId      String
+  
+  // Info
+  name            String
+  party           String?
+  description     String?  // Platform/biography
+  photoUrl        String?
+  photoHash       String?  // Integrity check
+  
+  // For weighted voting (corporate)
+  weight          Float    @default(1.0)
+  
+  // Metadata
+  order           Int      @default(0) // Display order
+  metadata        String?  // JSON for flexibility
+  
+  createdAt       DateTime @default(now())
+  
+  election        Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  votes           Vote[]
+  tallyResults    TallyResult[]
+  
+  @@index([electionId])
+  @@index([order])
+}
+
+model Voter {
+  id                  String    @id @default(uuid())
+  electionId          String
+  
+  // Anonymized identity
+  identityHash        String    // PBKDF2 210K iterations
+  votingTokenHash     String    @unique // SHA3-256
+  publicKey           String    // Voter's public key
+  registrationProof   String    // ZK proof of eligibility
+  
+  // Voting status
+  hasVoted            Boolean   @default(false)
+  votedAt             DateTime?
+  voteReceiptHash     String?   // Link to vote (still anonymous)
+  
+  // Audit (no PII)
+  registeredAt        DateTime  @default(now())
+  lastAccessAt        DateTime?
+  accessAttempts      Int       @default(0)
+  ipAddressHash       String?
+  
+  // For corporate/weighted voting
+  voteWeight          Float     @default(1.0) // Shares, rank, etc
+  
+  // Metadata for geographic/demographic data (JSON)
+  metadata            String?   // JSON for flexible data storage
+  
+  election            Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+
+  @@unique([electionId, identityHash])
+  @@index([votingTokenHash])
+  @@index([electionId, hasVoted])
+}
+
+model Vote {
+  id                String   @id @default(uuid())
+  electionId        String
+  candidateId       String
+  
+  // Encrypted vote
+  encryptedVote     String   // NaCl box encrypted
+  votingTokenHash   String   // Links to voter (anonymously)
+  voteProof         String   // ZK proof vote is valid
+  
+  // Verification
+  receiptHash       String   @unique // Voter's receipt
+  ledgerEntryHash   String   @unique // Public ledger ID
+  merkleRoot        String   // Merkle root at vote time
+  merkleProof       String   // JSON proof
+  
+  // DAG (optional - for advanced conflict resolution)
+  dagParents        String?  // JSON array of parent vote IDs
+  
+  // Blockchain
+  blockchainAnchor  String?  // Transaction hash
+  
+  // Weighted/ranked
+  weight            Float    @default(1.0)
+  rank              Int?     // For ranked-choice
+  
+  // Audit
+  ledgerTimestamp   DateTime @default(now())
+  ipAddressHash     String?
+  
+  election  Election  @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  
+  @@index([electionId])
+  @@index([candidateId])
+  @@index([receiptHash])
+  @@index([ledgerEntryHash])
+  @@index([votingTokenHash])
+}
+
+model TallyResult {
+  id              String   @id @default(uuid())
+  electionId      String
+  candidateId     String
+  
+  // Results
+  voteCount       Int      // Raw count
+  weightedVotes   Float?   // For weighted voting
+  percentage      Float?   // Percentage of total
+  
+  // Cryptographic proof
+  proof           String   // ZK proof tally is correct
+  merkleRoot      String   // All votes included
+  
+  // Audit
+  timestamp       DateTime @default(now())
+  verifiedBy      String?  // User ID who verified
+  
+  election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([electionId, candidateId])
+  @@index([electionId])
+}
+
+// ============================================================================
+// IMMUTABLE AUDIT TRAIL (Blockchain-style)
+// ============================================================================
+
+model LedgerEntry {
+  id                String   @id @default(uuid())
+  electionId        String
+  
+  // Entry type
+  entryType         String   // VOTE_CAST|TALLY|STATUS_CHANGE|KEY_CEREMONY|ADMIN_ACTION|REGISTRATION
+  
+  // Data
+  data              String   // JSON blob
+  dataHash          String   // SHA3-256 of data
+  
+  // Chaining (blockchain-style)
+  previousEntryHash String?  // Hash of previous entry
+  signature         String   // Ed25519 signature
+  signerPublicKey   String   // Who signed
+  
+  // Merkle tree
+  merkleProof       String?
+  
+  // Blockchain anchor
+  blockchainTx      String?
+  blockNumber       Int?
+  
+  timestamp         DateTime @default(now())
+  
+  election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+
+  @@index([electionId])
+  @@index([entryType])
+  @@index([timestamp])
+  @@index([previousEntryHash])
+}
+
+// ============================================================================
+// SECURITY & MONITORING
+// ============================================================================
+
+model AuditLog {
+  id              String   @id @default(uuid())
+  organizationId  String?
+  
+  // Actor
+  actor           String   // User ID, SuperAdmin ID, or "SYSTEM"
+  actorType       String   // USER|SUPER_ADMIN|SYSTEM|VOTER
+  actorEmail      String?  // For correlation
+  
+  // Action
+  action          String   // Specific action (CREATE_ELECTION, CAST_VOTE, etc)
+  resource        String   // What was acted upon
+  resourceId      String?  // ID of resource
+  
+  // Result
+  result          String   // SUCCESS|FAILURE|ERROR|UNAUTHORIZED
+  errorMessage    String?  // If failed
+  
+  // Context
+  ipAddress       String?  // Hashed
+  userAgent       String?  // Sanitized
+  method          String?  // HTTP method
+  path            String?  // API path
+  requestBody     String?  // Sanitized request (no secrets)
+  responseStatus  Int?     // HTTP status
+  duration        Int?     // Request duration (ms)
+  
+  // Metadata
+  details         String?  // JSON with additional context
+  timestamp       DateTime @default(now())
+  
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  @@index([organizationId])
+  @@index([timestamp])
+  @@index([actor])
+  @@index([action])
+  @@index([result])
+  @@index([actorType])
+}
+
+model SecurityEvent {
+  id              String    @id @default(uuid())
+  organizationId  String?
+  
+  // Event classification
+  severity        String    // LOW|MEDIUM|HIGH|CRITICAL
+  eventType       String    // BRUTE_FORCE|TIMING_ATTACK|INVALID_PROOF|DOUBLE_VOTE|IP_ANOMALY|etc
+  category        String?   // AUTHENTICATION|AUTHORIZATION|ENCRYPTION|INTEGRITY|etc
+  
+  // Details
+  details         String    // JSON with event specifics
+  affectedResource String?  // What was targeted
+  attackVector    String?   // How attack was attempted
+  
+  // Source
+  ipAddress       String?   // Hashed
+  userAgent       String?
+  userId          String?
+  
+  // Response
+  resolved        Boolean   @default(false)
+  resolvedAt      DateTime?
+  resolvedBy      String?   // SuperAdmin or User ID
+  resolution      String?   // What was done
+  falsePositive   Boolean   @default(false)
+  
+  timestamp       DateTime  @default(now())
+  
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  @@index([organizationId])
+  @@index([timestamp])
+  @@index([severity])
+  @@index([eventType])
+  @@index([resolved])
+}
+
+// ============================================================================
+// METRICS & MONITORING (Level 12 Admin Dashboard)
+// ============================================================================
+
+model SystemMetric {
+  id              String   @id @default(uuid())
+  
+  // Metric type
+  metricType      String   // REQUEST_COUNT|ERROR_RATE|VOTE_LATENCY|CRYPTO_PERF|DB_QUERY_TIME
+  metricName      String
+  
+  // Value
+  value           Float
+  unit            String   // ms, count, percentage, etc
+  
+  // Aggregation
+  aggregation     String   // GAUGE|COUNTER|HISTOGRAM
+  tags            String?  // JSON key-value pairs
+  
+  timestamp       DateTime @default(now())
+  
+  @@index([metricType])
+  @@index([metricName])
+  @@index([timestamp])
+}
+
+// ============================================================================
+// WEBHOOKS & INTEGRATIONS
+// ============================================================================
+
+model Webhook {
+  id              String    @id @default(uuid())
+  organizationId  String
+  
+  // Config
+  url             String
+  events          String    // JSON array of event types
+  secret          String    // HMAC secret for verification
+  
+  // Status
+  enabled         Boolean   @default(true)
+  failureCount    Int       @default(0)
+  lastSuccess     DateTime?
+  lastFailure     DateTime?
+  lastError       String?
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+// ============================================================================
+// COMPLIANCE & CERTIFICATION
+// ============================================================================
+
+model ComplianceReport {
+  id              String   @id @default(uuid())
+  organizationId  String
+  
+  // Report type
+  reportType      String   // SOC2|ISO27001|FIPS|AUDIT|PENTEST
+  standard        String   // SOC 2 Type II, ISO 27001, etc
+  
+  // Results
+  status          String   // PASS|FAIL|IN_PROGRESS|PENDING
+  score           Float?   // 0-100
+  findings        String   // JSON array of issues
+  
+  // Documents
+  reportUrl       String?  // S3 link to PDF
+  certificateUrl  String?
+  
+  // Dates
+  auditStartDate  DateTime
+  auditEndDate    DateTime?
+  expiryDate      DateTime?
+  
+  // Auditor
+  auditor         String?  // Company name
+  auditorEmail    String?
+  
+  createdAt       DateTime @default(now())
+  
+  @@index([organizationId])
+  @@index([reportType])
+  @@index([status])
+}
+
+// ============================================================================
+// REAL ELECTION DATA (Public Records - 2024 Presidential)
+// ============================================================================
+
+// US States with FIPS codes
+model State {
+  id              String   @id // FIPS code (e.g., "06" for California)
+  name            String   @unique // "California"
+  abbreviation    String   @unique // "CA"
+  
+  // Geographic (for map rendering)
+  centerLat       Float?
+  centerLng       Float?
+  
+  // 2024 Election totals (cached)
+  totalVotes      Int      @default(0)
+  votesGop        Int      @default(0)
+  votesDem        Int      @default(0)
+  votesOther      Int      @default(0)
+  winner          String?  // "GOP" | "DEM"
+  
+  // Electoral votes
+  electoralVotes  Int      @default(0)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  counties        County[]
+  
+  @@index([name])
+  @@index([abbreviation])
+}
+
+// US Counties with FIPS codes (3,100+ counties)
+model County {
+  id              String   @id // Full FIPS code (e.g., "06037" for LA County)
+  stateId         String   // State FIPS (e.g., "06")
+  name            String   // "Los Angeles County"
+  
+  // 2024 Presidential Results (REAL DATA)
+  votesGop        Int      @default(0) // Trump
+  votesDem        Int      @default(0) // Harris
+  totalVotes      Int      @default(0)
+  voteDiff        Int      @default(0) // GOP - DEM
+  percentGop      Float    @default(0)
+  percentDem      Float    @default(0)
+  percentDiff     Float    @default(0)
+  winner          String?  // "GOP" | "DEM"
+  
+  // Geographic (for map)
+  centerLat       Float?
+  centerLng       Float?
+  
+  // Reporting timeline (for election player)
+  reportedAt      DateTime? // When this county reported
+  reportOrder     Int?      // Order in which county reported
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  state           State    @relation(fields: [stateId], references: [id], onDelete: Cascade)
+  
+  @@unique([stateId, name])
+  @@index([stateId])
+  @@index([winner])
+  @@index([reportOrder])
+}
+
+// National Election Summary (2024)
+model NationalElection {
+  id              String   @id @default(uuid())
+  year            Int      @unique // 2024
+  type            String   // "PRESIDENTIAL"
+  
+  // Candidates
+  gopCandidate    String   // "Donald Trump"
+  demCandidate    String   // "Kamala Harris"
+  
+  // National totals
+  totalVotes      Int      @default(0)
+  votesGop        Int      @default(0)
+  votesDem        Int      @default(0)
+  votesOther      Int      @default(0)
+  
+  // Electoral College
+  electoralGop    Int      @default(0) // 312 for Trump
+  electoralDem    Int      @default(0) // 226 for Harris
+  electoralNeeded Int      @default(270)
+  
+  // Winner
+  winner          String?  // "GOP" | "DEM"
+  winnerName      String?  // "Donald Trump"
+  
+  // Data source
+  dataSource      String?  // "tonmcg/US_County_Level_Election_Results_08-24"
+  dataUrl         String?
+  lastUpdated     DateTime @default(now())
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([year])
+}

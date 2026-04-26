@@ -1,0 +1,461 @@
+.poll-demo {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.poll-header {
+  text-align: center;
+  margin-bottom: 3rem;
+  padding: 2rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 12px;
+}
+
+.poll-header h1 {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.poll-header p {
+  font-size: 1.25rem;
+  opacity: 0.95;
+}
+
+/* Voting Section */
+.poll-voting {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.poll-question {
+  text-align: center;
+  margin-bottom: 3rem;
+}
+
+.poll-question h2 {
+  font-size: 2rem;
+  color: #1e293b;
+  margin-bottom: 1rem;
+}
+
+.question-subtitle {
+  font-size: 1.125rem;
+  color: #1e293b;
+}
+
+.poll-options {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 3rem;
+}
+
+.poll-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem 2rem;
+  background: white;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  font-size: 1.125rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-align: left;
+}
+
+.poll-option:hover {
+  border-color: #667eea;
+  background: #f8fafc;
+  transform: translateX(8px);
+}
+
+.option-text {
+  color: #1e293b;
+  font-weight: 500;
+}
+
+.option-arrow {
+  color: #667eea;
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+.poll-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+  margin-top: 3rem;
+}
+
+.info-card {
+  text-align: center;
+  padding: 1.5rem;
+  background: white;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.info-icon {
+  width: 60px;
+  height: 60px;
+  margin: 0 auto 1rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-family: 'Courier New', monospace;
+}
+
+.info-card h3 {
+  margin-bottom: 0.5rem;
+  color: #1e293b;
+}
+
+.info-card p {
+  color: #1e293b;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+/* Results Section */
+.poll-results {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.success-message {
+  text-align: center;
+  padding: 2rem;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  border-radius: 12px;
+  margin-bottom: 2rem;
+}
+
+.success-icon {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 1rem;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+}
+
+.success-message h2 {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+.success-message p {
+  font-size: 1.125rem;
+  opacity: 0.95;
+}
+
+.receipt-section {
+  background: white;
+  padding: 2rem;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: 2rem;
+}
+
+.receipt-section h3 {
+  margin-bottom: 1.5rem;
+  color: #1e293b;
+  font-size: 1.5rem;
+}
+
+.receipt-box {
+  background: #f8fafc;
+  padding: 1.5rem;
+  border-radius: 8px;
+  border: 2px solid #e2e8f0;
+}
+
+.receipt-item {
+  margin-bottom: 1.5rem;
+}
+
+.receipt-label {
+  display: block;
+  color: #1e293b;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.875rem;
+}
+
+.receipt-value {
+  display: block;
+  background: white;
+  padding: 1rem;
+  border-radius: 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.875rem;
+  color: #1e293b;
+  word-break: break-all;
+}
+
+.merkle-proof {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.merkle-step {
+  display: block;
+  background: white;
+  padding: 0.75rem;
+  border-radius: 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.875rem;
+  color: #1e293b;
+}
+
+.show-crypto-btn {
+  width: 100%;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.show-crypto-btn:hover {
+  background: #5568d3;
+}
+
+.crypto-details {
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+  background: #eff6ff;
+  border-radius: 8px;
+  border-left: 4px solid #3b82f6;
+}
+
+.crypto-details h4 {
+  margin-bottom: 1rem;
+  color: #1e293b;
+}
+
+.crypto-steps {
+  list-style: none;
+  padding: 0;
+  counter-reset: step-counter;
+}
+
+.crypto-steps li {
+  counter-increment: step-counter;
+  margin-bottom: 1rem;
+  padding-left: 2rem;
+  position: relative;
+  line-height: 1.6;
+  color: #1e293b;
+}
+
+.crypto-steps li::before {
+  content: counter(step-counter);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 24px;
+  height: 24px;
+  background: #3b82f6;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  font-weight: bold;
+}
+
+.crypto-steps strong {
+  color: #1e293b;
+}
+
+.results-visualization {
+  background: white;
+  padding: 2rem;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: 2rem;
+}
+
+.results-visualization h3 {
+  margin-bottom: 0.5rem;
+  color: #1e293b;
+  font-size: 1.5rem;
+}
+
+.results-subtitle {
+  color: #1e293b;
+  margin-bottom: 1.5rem;
+}
+
+.results-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.result-bar {
+  padding: 1rem;
+  background: #f8fafc;
+  border-radius: 8px;
+}
+
+.result-label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.result-text {
+  color: #1e293b;
+  font-weight: 600;
+}
+
+.result-percentage {
+  color: #667eea;
+  font-weight: 700;
+  font-size: 1.125rem;
+}
+
+.result-bar-container {
+  width: 100%;
+  height: 24px;
+  background: #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.result-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  transition: width 0.5s ease;
+}
+
+.result-votes {
+  color: #1e293b;
+  font-size: 0.875rem;
+}
+
+.verification-section {
+  background: white;
+  padding: 2rem;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.verification-section h3 {
+  margin-bottom: 1rem;
+  color: #1e293b;
+}
+
+.verification-section p {
+  color: #1e293b;
+  line-height: 1.6;
+  margin-bottom: 1.5rem;
+}
+
+.verify-btn {
+  padding: 1rem 2rem;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 1.125rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.verify-btn:hover {
+  background: #5568d3;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.next-steps {
+  background: white;
+  padding: 2rem;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.next-steps h3 {
+  margin-bottom: 1.5rem;
+  color: #1e293b;
+  text-align: center;
+}
+
+.next-steps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+}
+
+.next-step-card {
+  padding: 1.5rem;
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+  transition: all 0.3s ease;
+}
+
+.next-step-card:hover {
+  border-color: #667eea;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+  transform: translateY(-4px);
+}
+
+.next-step-card h4 {
+  margin-bottom: 0.5rem;
+  color: #1e293b;
+}
+
+.next-step-card p {
+  color: #1e293b;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 768px) {
+  .poll-demo {
+    padding: 1rem;
+  }
+  
+  .poll-header h1 {
+    font-size: 1.75rem;
+  }
+  
+  .poll-option {
+    padding: 1rem 1.5rem;
+  }
+  
+  .poll-info {
+    grid-template-columns: 1fr;
+  }
+  
+  .next-steps-grid {
+    grid-template-columns: 1fr;
+  }
+}
