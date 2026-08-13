@@ -15,6 +15,12 @@ dist/
 build/
 *.tsbuildinfo
 
+# Real Groth16 zk-SNARK artifacts must ship with the repo - without them
+# generateZKProof() has no compiled circuit to prove against and silently
+# falls back to the non-ZK fiat-shamir path. See backend/circuits/README.md.
+!backend/circuits/build/
+!backend/circuits/build/**
+
 # Database
 *.db
 *.sqlite

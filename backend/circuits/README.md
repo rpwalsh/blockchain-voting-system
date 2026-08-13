@@ -1,8 +1,9 @@
-# ZK-SNARK Implementation - PRODUCTION GRADE
+# ZK-SNARK Implementation
 
 ## Overview
 
-This voting system uses **Groth16 zk-SNARKs** for zero-knowledge proofs of token validity. This is NSA-level cryptography used by:
+This voting system uses **Groth16 zk-SNARKs** for zero-knowledge proofs of
+token validity. This is the same proof system used by:
 - Zcash (private transactions)
 - Tornado Cash (mixing protocol)
 - Polygon Hermez (L2 scaling)
@@ -10,166 +11,152 @@ This voting system uses **Groth16 zk-SNARKs** for zero-knowledge proofs of token
 
 ## Security Properties
 
-✅ **Zero-Knowledge**: Proves token possession without revealing it  
-✅ **Succinct**: Proofs are ~200 bytes, verify in <5ms  
-✅ **Non-Interactive**: No back-and-forth with verifier  
-✅ **Publicly Verifiable**: Anyone can verify proofs  
-✅ **Post-Quantum Resistant Path**: Can upgrade to STARK/FRI
+- **Zero-Knowledge**: Proves token possession without revealing it
+- **Succinct**: Groth16 proofs are ~200 bytes, verify in single-digit ms
+- **Non-Interactive**: No back-and-forth with verifier
+- **Publicly Verifiable**: Anyone with `verification_key.json` can verify a proof
+- **Post-Quantum Migration Path**: Can be replaced with STARK/FRI without
+  changing anything outside the proof layer (see below)
 
-## Production Setup Requirements
+## `token_validity` circuit
 
-### 1. Install Circom Compiler
+Proves knowledge of a private voting token and a salt whose salted Poseidon
+commitment (over the BN254/alt_bn128 scalar field) matches a public
+commitment, without revealing the token - and binds the proof to a specific
+server-issued challenge via a public nullifier, so a captured proof can't be
+replayed against a later challenge. This is what backs
+`generateTokenValidityProof` / `verifyTokenValidityProof` /
+`computeTokenCommitment` in `src/crypto/engine.ts`.
 
-```bash
-# Method 1: npm (recommended)
-npm install -g circom
+Source: `token_validity.circom`. Circuit stats: 487 non-linear + 549 linear
+constraints, 1040 wires, 2 public inputs (`tokenHashCommitment`,
+`challengeHash`), 2 outputs (`validityFlag`, `nullifier`), 2 private inputs
+(`tokenPreimage`, `salt`).
 
-# Method 2: From source
-git clone https://github.com/iden3/circom.git
-cd circom
-cargo build --release
-cargo install --path circom
+```
+public inputs:  tokenHashCommitment, challengeHash
+private inputs: tokenPreimage, salt
+outputs:        validityFlag, nullifier
 ```
 
-### 2. Compile Circuit
+`verifyTokenValidityProof(proof, expectedCommitment, expectedChallenge)`
+checks, in order: the circuit's `publicSignals` array has the expected
+shape, `validityFlag === '1'`, the commitment in the proof matches
+`expectedCommitment`, the challenge hash matches `expectedChallenge`, and
+only then runs the real Groth16 pairing check (`snarkjs.groth16.verify`)
+against `verification_key.json`. Rejecting on a mismatched commitment or
+challenge before the pairing check is a cheap, honest short-circuit - it
+doesn't weaken the proof, since the pairing check would reject those cases
+anyway once you're comparing against the caller's expected values.
+
+## Build artifacts (`build/`)
+
+These are committed to the repo (see the `!backend/circuits/build/`
+exception in `.gitignore`) rather than gitignored, because
+`generateZKProof` checks for their existence at runtime and silently falls
+back to a non-ZK path if they're missing - anyone cloning the repo needs
+the real artifacts present to get real proofs, not just the source.
+
+- `token_validity.r1cs`, `token_validity.sym` - compiled circuit
+- `token_validity_js/token_validity.wasm` - witness calculator
+- `pot12_final.ptau` - Powers of Tau ceremony (bn128, 2^12 = 4096
+  constraints), generated locally rather than fetched from a third-party
+  ceremony - reasonable for a circuit this size in a demo project, see
+  "Production trusted setup" below for what a real deployment needs instead
+- `token_validity.zkey` - circuit-specific Groth16 proving key, after
+  phase-2 setup and a contribution
+- `verification_key.json` - exported Groth16 verification key (safe to be
+  public; this is what `verifyZKProof` reads)
+
+## Regenerating
 
 ```bash
 cd backend/circuits
-circom token_validity.circom --r1cs --wasm --sym --c
+circom token_validity.circom --r1cs --wasm --sym -o build/
+npx snarkjs powersoftau new bn128 12 build/pot12_0000.ptau -v
+npx snarkjs powersoftau contribute build/pot12_0000.ptau build/pot12_0001.ptau --name="contribution" -v
+npx snarkjs powersoftau prepare phase2 build/pot12_0001.ptau build/pot12_final.ptau -v
+npx snarkjs groth16 setup build/token_validity.r1cs build/pot12_final.ptau build/token_validity_0000.zkey
+npx snarkjs zkey contribute build/token_validity_0000.zkey build/token_validity.zkey --name="contribution" -v
+npx snarkjs zkey export verificationkey build/token_validity.zkey build/verification_key.json
 ```
 
-This generates:
-- `token_validity.r1cs` - Rank-1 Constraint System
-- `token_validity.wasm` - Witness generator
-- `token_validity.sym` - Debug symbols
+## Production trusted setup
 
-### 3. Trusted Setup Ceremony (CRITICAL)
+The ceremony above is a single-contributor local setup - fine for a demo,
+**not** sufficient for a real election. A production deployment needs a
+multi-party ceremony:
 
-**SECURITY REQUIREMENT**: Must use multi-party computation (MPC)
+### Option A: Use an existing large ceremony (recommended)
 
-#### Option A: Use Existing Ceremony (Recommended)
+Reuse a Powers of Tau output from an established public ceremony instead of
+running your own, e.g. the Hermez ceremony (supports circuits up to 2^16
+constraints, well above this circuit's size, and already has hundreds of
+public contributions):
 
-Download Powers of Tau from Hermez ceremony:
 ```bash
-cd circuits/build
 wget https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final_16.ptau
 ```
 
-This supports circuits up to 2^16 = 65,536 constraints (tested by Polygon)
-
-#### Option B: Run Your Own Ceremony
-
-**Only for maximum paranoia or custom requirements**
+### Option B: Run your own multi-party ceremony
 
 ```bash
-# Phase 1: Powers of Tau (universal, reusable)
 snarkjs powersoftau new bn128 16 pot16_0000.ptau
-snarkjs powersoftau contribute pot16_0000.ptau pot16_0001.ptau --name="First contribution"
-
-# Each participant adds entropy:
-snarkjs powersoftau contribute pot16_0001.ptau pot16_0002.ptau --name="Second contribution"
-snarkjs powersoftau contribute pot16_0002.ptau pot16_0003.ptau --name="Third contribution"
-
-# Minimum 3 participants, recommend 50+ for nation-state resistance
-
-# Finalize Phase 1
+snarkjs powersoftau contribute pot16_0000.ptau pot16_0001.ptau --name="Participant 1"
+snarkjs powersoftau contribute pot16_0001.ptau pot16_0002.ptau --name="Participant 2"
+snarkjs powersoftau contribute pot16_0002.ptau pot16_0003.ptau --name="Participant 3"
+# minimum 3 independent participants; more contributors -> stronger
+# soundness guarantee, since only one honest participant needs to destroy
+# their toxic waste for the whole ceremony to be secure
 snarkjs powersoftau prepare phase2 pot16_0003.ptau pot16_final.ptau
 
-# Phase 2: Circuit-specific setup
 snarkjs groth16 setup token_validity.r1cs pot16_final.ptau token_validity_0000.zkey
-
-# Each participant contributes:
 snarkjs zkey contribute token_validity_0000.zkey token_validity_0001.zkey --name="Participant 1"
-snarkjs zkey contribute token_validity_0001.zkey token_validity_0002.zkey --name="Participant 2"
-snarkjs zkey contribute token_validity_0002.zkey token_validity_final.zkey --name="Participant 3"
-
-# Verify setup integrity
+snarkjs zkey contribute token_validity_0001.zkey token_validity_final.zkey --name="Participant 2"
 snarkjs zkey verify token_validity.r1cs pot16_final.ptau token_validity_final.zkey
-
-# Export verification key (public)
 snarkjs zkey export verificationkey token_validity_final.zkey verification_key.json
 ```
 
-### 4. Security Requirements for Ceremony
+Security controls that matter for a ceremony backing a real election:
+air-gapped participant machines, secure deletion of intermediate ("toxic
+waste") files immediately after each contribution, independent
+geographically-distributed participants, a public transcript of every
+contribution, and diverse entropy sources per participant.
 
-🔐 **MANDATORY SECURITY CONTROLS**:
+## What's real vs. not yet
 
-1. **Air-Gapped Machines**: Each participant uses isolated machine
-2. **Toxic Waste Destruction**: All intermediate files MUST be securely deleted
-3. **Independent Parties**: Minimum 3, ideally 50+ geographically distributed
-4. **Cryptographic Attestation**: Each contribution signed and timestamped
-5. **Public Transcript**: All contributions publicly verifiable
-6. **Diverse Entropy Sources**: Hardware RNG, atmospheric noise, dice rolls
-7. **Video Documentation**: Record ceremony for transparency
-8. **Multi-Jurisdiction**: Participants across multiple legal jurisdictions
+`token_validity` is a real, verified end-to-end Groth16 circuit -
+`generateZKProof`/`verifyZKProof` in `engine.ts` call `snarkjs.groth16`
+directly against the committed artifacts above, and
+`src/__tests__/crypto/engine-zk-paths.test.ts` generates and verifies real
+proofs with no mocking: it confirms a proof verifies against the right
+commitment/challenge, that it's rejected against the wrong token
+commitment, rejected against a stale challenge, rejected when tampered, and
+that the nullifier differs across challenges for the same token (replay
+protection).
 
-**Why This Matters**: If even ONE participant in ceremony honestly destroys their toxic waste, the entire system is secure.
+`vote-validity` has no compiled circuit yet. `generateVoteValidityProof`
+falls back to a Fiat-Shamir-style commitment in that case - it's labeled
+`protocol: 'fiat-shamir-fallback'` in the returned object specifically so
+it can't be confused with (or accidentally accepted as) a real Groth16
+proof. `verifyZKProof` refuses to verify anything that isn't
+`protocol: 'groth16'`.
 
-## Current Implementation
+## Post-quantum path
 
-### Development Mode (Current)
-- Uses secure fallback with Fiat-Shamir heuristic
-- Maintains all security properties
-- No trusted setup required for testing
-- Performance: ~1ms proof generation
-
-### Production Mode (After Setup)
-- Uses real Groth16 with compiled circuits
-- Requires completed trusted setup ceremony  
-- Performance: ~50ms proof, <5ms verification
-- Proof size: ~200 bytes
-
-## Verification
-
-After setup, verify everything works:
-
-```bash
-# Test proof generation
-node scripts/test-zksnark.js
-
-# Verify circuit constraints
-snarkjs r1cs print token_validity.r1cs token_validity.sym
-
-# Verify setup ceremony
-snarkjs zkey verify token_validity.r1cs pot16_final.ptau token_validity_final.zkey
-```
-
-## Upgrading to Production
-
-1. Complete trusted setup ceremony (see above)
-2. Place files in `circuits/build/`:
-   - `token_validity.wasm`
-   - `token_validity.zkey`
-   - `verification_key.json`
-3. System automatically detects and uses real Groth16
-4. Run integration tests to verify
-
-## Post-Quantum Future
-
-When quantum computers threaten elliptic curves:
-
-1. Replace Groth16 with **STARKs** (transparent, no trusted setup)
-2. Or use **FRI-based SNARKs** (quantum-resistant)
-3. Cryptography engine designed for easy upgrade
-4. Only affects proof system, not application logic
+Groth16's soundness relies on elliptic-curve pairing assumptions, which are
+not post-quantum secure. If that ever becomes a real threat model for this
+system, the proof layer (this circuit + `snarkjs.groth16.*` calls in
+`engine.ts`) can be swapped for a STARK/FRI-based system without changing
+anything else in the application - the commitment scheme and public
+interface (`generateTokenValidityProof`/`verifyTokenValidityProof`) stay
+the same either way.
 
 ## References
 
-- **Circom**: https://docs.circom.io/
-- **snarkjs**: https://github.com/iden3/snarkjs
-- **Groth16 Paper**: https://eprint.iacr.org/2016/260.pdf
-- **Hermez Ceremony**: https://blog.hermez.io/hermez-powersoftau-ceremony-begins/
-- **ZCash Ceremony**: https://z.cash/technology/paramgen/
-- **Trusted Setup Guide**: https://vitalik.ca/general/2022/03/14/trustedsetup.html
-
-## Compliance
-
-- **FIPS 140-3**: Cryptographic module validation (in progress)
-- **Common Criteria EAL4+**: Security evaluation framework
-- **NIST SP 800-90A**: Random number generation
-- **ISO 27001**: Information security management
-
-##License
-
-PROPRIETARY - Trustless Voting Inc.
-Cryptographic implementations audited by [AUDITOR NAME] (Q2 2026)
+- Circom: https://docs.circom.io/
+- snarkjs: https://github.com/iden3/snarkjs
+- Groth16 paper: https://eprint.iacr.org/2016/260.pdf
+- Hermez Powers of Tau ceremony: https://blog.hermez.io/hermez-powersoftau-ceremony-begins/
+- Zcash parameter generation: https://z.cash/technology/paramgen/
+- Trusted setup explainer: https://vitalik.ca/general/2022/03/14/trustedsetup.html

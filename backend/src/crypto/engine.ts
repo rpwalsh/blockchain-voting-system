@@ -29,6 +29,54 @@ import { sha3_256, sha3_512 } from 'js-sha3';
 // @ts-ignore - snarkjs doesn't have complete TypeScript definitions
 const snarkjs = require('snarkjs');
 const { groth16 } = snarkjs;
+// @ts-ignore - circomlibjs doesn't ship complete TypeScript definitions
+const { buildPoseidon } = require('circomlibjs');
+
+// BN254 (alt_bn128) scalar field modulus - the field the token_validity
+// circuit's Poseidon hashes operate over. Circuit inputs must be reduced
+// into this field.
+const BN254_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+// Domain separator for deriving a commitment salt from the token itself
+// (see deriveSaltField) rather than generating and having to separately
+// store/transmit a random salt. Arbitrary fixed constant, distinct from
+// any real token/challenge value.
+const SALT_DOMAIN_SEPARATOR = 0x53414c545f444f4d41494e5f5632n % BN254_SCALAR_FIELD;
+
+let poseidonPromise: Promise<any> | null = null;
+function getPoseidon() {
+  if (!poseidonPromise) poseidonPromise = buildPoseidon();
+  return poseidonPromise;
+}
+
+// Reduces an arbitrary base64 string (a voting token from
+// generateVotingToken, or a challenge from generateChallenge - both are
+// base64-encoded random bytes) into a BN254 field element usable as a
+// circuit input signal.
+function stringToFieldElement(value: string): bigint {
+  const bytes = Buffer.from(value, 'base64');
+  const asBigInt = BigInt('0x' + bytes.toString('hex'));
+  return asBigInt % BN254_SCALAR_FIELD;
+}
+
+// Derives the commitment salt deterministically from the token, so the
+// voter only ever needs to hold onto the token itself (no separate salt
+// to store or transmit) to reproduce the same commitment across
+// multiple proofs.
+async function deriveSaltField(tokenField: bigint): Promise<bigint> {
+  const poseidon = await getPoseidon();
+  return BigInt(poseidon.F.toString(poseidon([tokenField, SALT_DOMAIN_SEPARATOR])));
+}
+
+// Computes the public Poseidon(tokenPreimage, salt) commitment for a
+// token - this is what a verifier stores at token-issuance time and
+// checks a later proof against, without ever seeing the token itself.
+export async function computeTokenCommitment(token: string): Promise<string> {
+  const poseidon = await getPoseidon();
+  const tokenField = stringToFieldElement(token);
+  const saltField = await deriveSaltField(tokenField);
+  return poseidon.F.toString(poseidon([tokenField, saltField]));
+}
 
 // SECURITY: Constants per NIST recommendations
 const PBKDF2_ITERATIONS = 210000; // OWASP 2024 recommendation
@@ -253,29 +301,36 @@ function gfInverse(a: number): number {
 }
 
 /**
- * Generate voting token with entropy analysis
+ * Generate a voting token.
+ *
+ * This used to run a per-token Shannon entropy self-check (reject the
+ * output of randomBytes() if its empirical entropy looked "too low").
+ * That check was removed: for a 32-byte sample, the maximum possible
+ * empirical Shannon entropy is log2(32) = 5 bits (reached only when all
+ * 32 bytes are distinct), never the ~7.5-8 bits the check required - so
+ * it rejected 100% of real cryptographically random output, including
+ * output from this exact randomBytes() call. Verified empirically:
+ * 1000/1000 real samples failed the old check. randomBytes() is backed
+ * by the OS CSPRNG and doesn't need (and can't usefully receive) a
+ * runtime statistical self-test on individual 32-byte outputs.
  */
 export function generateVotingToken(): string {
   const token = randomBytes(32);
-  
-  // Entropy check (should be ~256 bits)
-  const entropy = calculateShannonEntropy(token);
-  if (entropy < 7.5) { // Should be close to 8.0 for perfect randomness
-    throw new Error('Insufficient entropy in token generation');
-  }
-  
   return naclUtil.encodeBase64(token);
 }
 
 /**
- * Calculate Shannon entropy (randomness measure)
+ * Calculate Shannon entropy (randomness measure) of a byte buffer.
+ * Only meaningful for samples much larger than the symbol space (256)
+ * being measured - see generateVotingToken's note above for why this
+ * isn't used as a per-token self-check.
  */
-function calculateShannonEntropy(data: Buffer): number {
+export function calculateShannonEntropy(data: Buffer): number {
   const freq = new Map<number, number>();
   for (const byte of data) {
     freq.set(byte, (freq.get(byte) || 0) + 1);
   }
-  
+
   let entropy = 0;
   const len = data.length;
   for (const count of freq.values()) {
@@ -399,160 +454,158 @@ export function decryptVote(
  * @param circuit - Circuit identifier
  * @returns ZKProof - Groth16 proof
  */
-export function generateZKProof(
+export async function generateZKProof(
   witness: any,
   provingKey: any,
   circuit: string
-): ZKProof {
-  // PRODUCTION PATH: Use real Groth16 if circuits are compiled
-  // This requires: circom compilation + trusted setup ceremony
-  // For CI/CD where circuits aren't compiled: Use secure fallback
-  
+): Promise<ZKProof> {
+  // Real Groth16 path: only wired up for circuits that have actually been
+  // compiled and gone through a trusted setup (currently just
+  // 'token_validity' - see circuits/token_validity.circom and
+  // circuits/README.md for how the proving/verification artifacts under
+  // circuits/build/ were generated).
   const circuitPath = `./circuits/build/${circuit}_js/${circuit}.wasm`;
   const zkeyPath = `./circuits/build/${circuit}.zkey`;
-  
+
   const fs = require('fs');
   const path = require('path');
-  
+
   if (fs.existsSync(path.resolve(circuitPath)) && fs.existsSync(path.resolve(zkeyPath))) {
-    // REAL ZK-SNARK PATH - Groth16 proof generation
-    try {
-      // This is async but we need sync for now - in production use async version
-      // For now: use the structured proof format that snarkjs expects
-      const proofData = sha3_256(JSON.stringify(witness) + circuit + Date.now());
-      
-      return {
-        proof: proofData,
-        publicInputs: [sha3_256(JSON.stringify(witness))],
-        curve: 'bn128',
-        protocol: 'groth16',
-        version: 'snarkjs-0.7.x',
-      };
-    } catch (error) {
-      console.warn('Groth16 proof failed, using fallback:', error);
-    }
+    const { proof, publicSignals } = await groth16.fullProve(
+      witness,
+      path.resolve(circuitPath),
+      path.resolve(zkeyPath)
+    );
+
+    return {
+      proof: JSON.stringify(proof),
+      publicInputs: publicSignals,
+      curve: 'bn128',
+      protocol: 'groth16',
+      version: 'snarkjs-0.7.x',
+    };
   }
-  
-  // SECURE FALLBACK: Fiat-Shamir heuristic with Poseidon-like hash
-  // This maintains security properties while allowing testing without full setup
-  // PRODUCTION: Replace with actual Groth16 after trusted setup
-  
+
+  // FALLBACK (not zero-knowledge): used only for circuits that don't have
+  // compiled artifacts yet, e.g. 'vote-validity'. This is a commitment,
+  // not a proof of knowledge - it must not be presented as a Groth16
+  // proof to a caller expecting real ZK guarantees.
   const witnessHash = sha3_512(JSON.stringify(witness));
   const commitment = sha3_256(witnessHash + circuit);
   const challenge = sha3_256(commitment + witnessHash);
   const response = sha3_512(challenge + witnessHash + circuit);
-  
-  // Structure matches Groth16 output format for compatibility
+
   return {
-    proof: response.substring(0, 64), // Simulated pi_a, pi_b, pi_c
+    proof: response.substring(0, 64),
     publicInputs: [commitment],
     curve: 'bn128',
-    protocol: 'groth16',
-    version: 'snarkjs-0.7.x',
+    protocol: 'fiat-shamir-fallback',
+    version: 'uncompiled-circuit',
   };
 }
 
 /**
- * VERIFY ZK-SNARK PROOF - PRODUCTION GROTH16
- * ===========================================
- * Verifies Groth16 proof using verification key
- * 
+ * Verify a ZK proof. For 'groth16' proofs this performs real pairing-based
+ * Groth16 verification against the compiled verification key. Proofs
+ * produced by the fiat-shamir-fallback path (see generateZKProof) are
+ * rejected here - they were never zero-knowledge and can't be verified
+ * as such.
+ *
  * @param proof - ZKProof from generateZKProof
- * @param verificationKey - vkey from trusted setup
- * @param publicInputs - Public signals
+ * @param publicInputs - Expected public signals (e.g. the token commitment)
  * @returns boolean - Proof validity
  */
-export function verifyZKProof(
+export async function verifyZKProof(
   proof: ZKProof,
-  verificationKey: any,
   publicInputs: string[]
-): boolean {
-  // PRODUCTION PATH: Use real Groth16 verification
+): Promise<boolean> {
+  if (proof.protocol !== 'groth16') return false;
+
   const vkeyPath = './circuits/build/verification_key.json';
   const fs = require('fs');
   const path = require('path');
-  
-  if (fs.existsSync(path.resolve(vkeyPath))) {
-    try {
-      // Real Groth16 verification would be:
-      // const vKey = JSON.parse(fs.readFileSync(vkeyPath));
-      // return await groth16.verify(vKey, publicInputs, proof);
-      
-      // For sync operation: validate structure
-      if (!proof.proof || !proof.publicInputs) return false;
-      
-      // Verify publicInputs match
-      if (proof.publicInputs.length !== publicInputs.length) return false;
-      
-      // Constant-time comparison
-      for (let i = 0; i < publicInputs.length; i++) {
-        if (!constantTimeEqual(proof.publicInputs[i], publicInputs[i])) {
-          return false;
-        }
-      }
-      
-      return true;
-    } catch (error) {
-      console.warn('Groth16 verify failed:', error);
-      return false;
-    }
+
+  if (!fs.existsSync(path.resolve(vkeyPath))) return false;
+
+  try {
+    const vkey = JSON.parse(fs.readFileSync(path.resolve(vkeyPath), 'utf-8'));
+    const groth16Proof = JSON.parse(proof.proof);
+    return await groth16.verify(vkey, publicInputs, groth16Proof);
+  } catch (error) {
+    console.warn('Groth16 verify failed:', error);
+    return false;
   }
-  
-  // SECURE FALLBACK: Verify structure and publicInputs
-  if (proof.publicInputs.length !== publicInputs.length) return false;
-  
-  // Constant-time comparison to prevent timing attacks
-  for (let i = 0; i < publicInputs.length; i++) {
-    if (!constantTimeEqual(proof.publicInputs[i], publicInputs[i])) {
-      return false;
-    }
-  }
-  
-  return true;
 }
 
 /**
- * Generate token validity proof using PRODUCTION Groth16 zk-SNARK
- * PRODUCTION-GRADE: Non-interactive zero-knowledge proof
- * 
- * Proves knowledge of token without revealing it
- * Uses Groth16 via snarkjs when circuits are compiled
- * Secure Fiat-Shamir fallback for testing/development
- * 
+ * Generate a real Groth16 zero-knowledge proof of token validity: proves
+ * knowledge of a voting token whose salted Poseidon commitment matches a
+ * public value, without revealing the token. See circuits/token_validity.circom.
+ *
+ * The proof's public signals (in order) are:
+ *   [validityFlag, nullifier, tokenHashCommitment, challengeHash]
+ * `nullifier` is Poseidon(tokenPreimage, challengeHash) as a circuit
+ * *output* - the verifier can't recompute it independently (it depends
+ * on the secret token), but can check it against previously-seen
+ * nullifiers to reject a replayed proof. This library doesn't persist
+ * seen nullifiers itself (no storage layer wired up) - callers that want
+ * replay protection should track `proof.publicInputs[1]` themselves.
+ *
  * @param token - Voting token (secret)
- * @param challenge - Challenge from verifier
- * @returns ZKProof - Groth16 proof structure
+ * @param challenge - Freshness nonce from verifier, bound into the proof
+ * @returns ZKProof - real Groth16 proof, or the fiat-shamir fallback if
+ *   the circuit hasn't been compiled in this environment
  */
-export function generateTokenValidityProof(token: string, challenge: string): ZKProof {
-  // Prepare witness (private inputs)
-  const tokenHash = sha3_256(token);
-  const challengeHash = sha3_256(challenge);
-  const salt = randomBytes(32).toString('hex');
-  
+export async function generateTokenValidityProof(token: string, challenge: string): Promise<ZKProof> {
+  const tokenField = stringToFieldElement(token);
+  const saltField = await deriveSaltField(tokenField);
+  const challengeField = stringToFieldElement(challenge);
+  const poseidon = await getPoseidon();
+  const tokenHashCommitment = poseidon.F.toString(poseidon([tokenField, saltField]));
+
   const witness = {
-    tokenPreimage: tokenHash,
-    salt,
-    tokenHashCommitment: sha3_256(tokenHash + salt),
-    challengeHash,
+    tokenHashCommitment,
+    challengeHash: challengeField.toString(),
+    tokenPreimage: tokenField.toString(),
+    salt: saltField.toString(),
   };
-  
-  // Call main zk-SNARK generation (uses Groth16 if available)
   return generateZKProof(witness, null, 'token_validity');
 }
 
 /**
- * Verify token validity proof
+ * Verify a token validity proof against the token's stored Poseidon
+ * commitment (see computeTokenCommitment) and the challenge that was
+ * issued for this verification attempt. Confirms the proof's claimed
+ * commitment/challenge match what's expected *and* that the underlying
+ * Groth16 proof is cryptographically valid - a proof generated for a
+ * different token or a different (stale) challenge is rejected before
+ * the pairing check even runs.
  */
-export function verifyTokenValidityProof(proof: ZKProof, tokenHash: string): boolean {
-  return verifyZKProof(proof, null, [tokenHash]);
+export async function verifyTokenValidityProof(
+  proof: ZKProof,
+  expectedCommitment: string,
+  expectedChallenge: string
+): Promise<boolean> {
+  if (proof.publicInputs.length !== 4) return false;
+  const [validityFlag, , tokenHashCommitment, challengeHash] = proof.publicInputs;
+  const expectedChallengeField = stringToFieldElement(expectedChallenge).toString();
+
+  if (validityFlag !== '1') return false;
+  if (!constantTimeEqual(tokenHashCommitment, expectedCommitment)) return false;
+  if (!constantTimeEqual(challengeHash, expectedChallengeField)) return false;
+
+  return verifyZKProof(proof, proof.publicInputs);
 }
 
 /**
- * Generate vote validity proof (wrapper for generateZKProof)  
+ * Generate vote validity proof (wrapper for generateZKProof).
+ * No compiled circuit exists for 'vote-validity' yet, so this currently
+ * always returns the fiat-shamir-fallback commitment, not a real proof -
+ * see generateZKProof's protocol field to distinguish the two.
  */
-export function generateVoteValidityProof(encryptedVote: EncryptedVote, validCandidateIds: string[]): string {
+export async function generateVoteValidityProof(encryptedVote: EncryptedVote, validCandidateIds: string[]): Promise<string> {
   const witness = { encryptedVote, validCandidateIds };
-  const proof = generateZKProof(witness, null, 'vote-validity');
+  const proof = await generateZKProof(witness, null, 'vote-validity');
   return JSON.stringify(proof);
 }
 
@@ -790,6 +843,7 @@ export default {
   splitSecretShamir,
   reconstructSecretShamir,
   generateVotingToken,
+  computeTokenCommitment,
   hashVotingToken,
   createIdentityHash,
   encryptVote,

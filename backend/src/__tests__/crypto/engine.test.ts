@@ -9,6 +9,7 @@ import {
   generateTokenValidityProof,
   verifyTokenValidityProof,
   generateVoteValidityProof,
+  computeTokenCommitment,
   signData,
   verifySignature,
   createReceiptHash,
@@ -114,30 +115,35 @@ describe('Shamir Secret Sharing', () => {
 
 describe('Token Validity Proofs', () => {
   describe('generateTokenValidityProof', () => {
-    it('should generate token validity proof', () => {
-      const token = 'test-voting-token-' + Date.now();
+    it('should generate a real Groth16 token validity proof', async () => {
+      const token = Buffer.from('test-voting-token-' + Date.now()).toString('base64');
       const challenge = 'challenge-' + Date.now();
-      
-      const proof = generateTokenValidityProof(token, challenge);
-      
+
+      const proof = await generateTokenValidityProof(token, challenge);
+
       expect(proof).toHaveProperty('proof');
       expect(proof).toHaveProperty('publicInputs');
       expect(proof).toHaveProperty('protocol');
-      // Now uses REAL Groth16 zk-SNARKs
+      // Real Groth16 zk-SNARK, verified end-to-end below
       expect(proof.protocol).toBe('groth16');
     });
 
-    it('should generate different proofs for different tokens', () => {
+    it('should generate different proofs for different tokens', async () => {
       const challenge = 'same-challenge';
-      const proof1 = generateTokenValidityProof('token1', challenge);
-      const proof2 = generateTokenValidityProof('token2', challenge);
-      
+      const token1 = Buffer.from('token1').toString('base64');
+      const token2 = Buffer.from('token2').toString('base64');
+      const proof1 = await generateTokenValidityProof(token1, challenge);
+      const proof2 = await generateTokenValidityProof(token2, challenge);
+
       expect(proof1.proof).not.toBe(proof2.proof);
+      // index 2 is tokenHashCommitment; index 0 (validityFlag) is always '1'
+      expect(proof1.publicInputs[2]).not.toBe(proof2.publicInputs[2]);
     });
 
-    it('should include curve information', () => {
-      const proof = generateTokenValidityProof('token', 'challenge');
-      
+    it('should include curve information', async () => {
+      const token = Buffer.from('token').toString('base64');
+      const proof = await generateTokenValidityProof(token, 'challenge');
+
       // Groth16 uses bn128 (Barreto-Naehrig) curve
       expect(proof.curve).toBe('bn128');
       expect(proof.version).toBe('snarkjs-0.7.x');
@@ -145,30 +151,39 @@ describe('Token Validity Proofs', () => {
   });
 
   describe('verifyTokenValidityProof', () => {
-    it('should verify valid token proof', () => {
-      const token = 'valid-token-' + Date.now();
+    it('verifies a valid proof against the token\'s real Poseidon commitment and issued challenge', async () => {
+      const token = Buffer.from('valid-token-' + Date.now()).toString('base64');
       const challenge = 'challenge-' + Date.now();
-      const proof = generateTokenValidityProof(token, challenge);
-      const tokenHash = sha3_256(token);
-      
-      const result = verifyTokenValidityProof(proof, tokenHash);
-      expect(typeof result).toBe('boolean');
+      const proof = await generateTokenValidityProof(token, challenge);
+      const commitment = await computeTokenCommitment(token);
+
+      const result = await verifyTokenValidityProof(proof, commitment, challenge);
+      expect(result).toBe(true);
     });
 
-    it('should handle proof verification', () => {
-      const token = 'another-token';
-      const proof = generateTokenValidityProof(token, 'chal');
-      const tokenHash = sha3_256(token);
-      
-      const result = verifyTokenValidityProof(proof, tokenHash);
-      expect(typeof result).toBe('boolean');
+    it('rejects verification against an unrelated sha3 hash (not a Poseidon commitment)', async () => {
+      const token = Buffer.from('another-token').toString('base64');
+      const proof = await generateTokenValidityProof(token, 'chal');
+      const unrelatedHash = sha3_256(token);
+
+      const result = await verifyTokenValidityProof(proof, unrelatedHash, 'chal');
+      expect(result).toBe(false);
+    });
+
+    it('rejects verification against the right commitment but a stale challenge', async () => {
+      const token = Buffer.from('stale-challenge-token').toString('base64');
+      const proof = await generateTokenValidityProof(token, 'original-challenge');
+      const commitment = await computeTokenCommitment(token);
+
+      const result = await verifyTokenValidityProof(proof, commitment, 'different-challenge');
+      expect(result).toBe(false);
     });
   });
 });
 
 describe('Vote Validity Proofs', () => {
   describe('generateVoteValidityProof', () => {
-    it('should generate vote validity proof', () => {
+    it('should generate a vote validity commitment', async () => {
       const encryptedVote = {
         ciphertext: 'encrypted-vote-data',
         nonce: 'random-nonce',
@@ -180,14 +195,17 @@ describe('Vote Validity Proofs', () => {
         timestamp: Date.now(),
       };
       const validCandidateIds = ['candidate1', 'candidate2', 'candidate3'];
-      
-      const proof = generateVoteValidityProof(encryptedVote, validCandidateIds);
-      
+
+      const proof = await generateVoteValidityProof(encryptedVote, validCandidateIds);
+
       expect(proof).toBeTruthy();
       expect(typeof proof).toBe('string');
+      // No compiled circuit for vote-validity yet - this is the honest
+      // fallback commitment, not a Groth16 proof (see engine.ts).
+      expect(JSON.parse(proof).protocol).toBe('fiat-shamir-fallback');
     });
 
-    it('should handle single candidate', () => {
+    it('should handle single candidate', async () => {
       const encryptedVote = {
         ciphertext: 'vote',
         nonce: 'nonce',
@@ -198,8 +216,8 @@ describe('Vote Validity Proofs', () => {
         algorithm: 'XSalsa20-Poly1305',
         timestamp: Date.now(),
       };
-      
-      const proof = generateVoteValidityProof(encryptedVote, ['solo-candidate']);
+
+      const proof = await generateVoteValidityProof(encryptedVote, ['solo-candidate']);
       expect(proof).toBeTruthy();
     });
   });

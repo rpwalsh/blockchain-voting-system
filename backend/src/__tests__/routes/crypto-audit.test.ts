@@ -63,11 +63,13 @@ jest.mock('../../crypto/engine', () => {
         { x: 4, share: 'share4-data' },
         { x: 5, share: 'share5-data' },
       ]),
-      generateTokenValidityProof: jest.fn().mockReturnValue({
-        protocol: 'Schnorr',
-        curve: 'Curve25519',
-        publicInputs: ['input1', 'input2'],
+      generateTokenValidityProof: jest.fn().mockResolvedValue({
+        protocol: 'groth16',
+        curve: 'bn128',
+        publicInputs: ['12345678901234567890'],
       }),
+      computeTokenCommitment: jest.fn().mockResolvedValue('12345678901234567890'),
+      verifyTokenValidityProof: jest.fn().mockResolvedValue(true),
       generateVotingToken: jest.fn().mockReturnValue('voting-token-123'),
       generateChallenge: jest.fn().mockReturnValue('challenge-456'),
       createReceiptHash: jest.fn().mockReturnValue('receipt-hash-12345678901234567890'),
