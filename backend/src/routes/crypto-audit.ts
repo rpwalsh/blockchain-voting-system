@@ -189,19 +189,26 @@ router.get('/live-demo', async (req: Request, res: Response) => {
     },
   });
 
-  // 7. Zero-Knowledge Proof Demo
+  // 7. Zero-Knowledge Proof Demo (real Groth16 proof + real verification)
   const zkStart = Date.now();
-  const zkProof = crypto.generateTokenValidityProof(
-    crypto.generateVotingToken(),
-    crypto.generateChallenge()
-  );
+  const zkToken = crypto.generateVotingToken();
+  const zkChallenge = crypto.generateChallenge();
+  const zkProof = await crypto.generateTokenValidityProof(zkToken, zkChallenge);
+  const zkCommitment = await crypto.computeTokenCommitment(zkToken);
+  const zkVerified = await crypto.verifyTokenValidityProof(zkProof, zkCommitment, zkChallenge);
+  const zkWrongCommitment = await crypto.computeTokenCommitment(crypto.generateVotingToken());
+  const zkRejectsWrongToken = await crypto.verifyTokenValidityProof(zkProof, zkWrongCommitment, zkChallenge);
+  const zkRejectsStaleChallenge = await crypto.verifyTokenValidityProof(zkProof, zkCommitment, crypto.generateChallenge());
   demos.push({
-    operation: 'Zero-Knowledge Proof Generation',
+    operation: 'Zero-Knowledge Proof Generation + Verification',
     duration: `${Date.now() - zkStart}ms`,
     result: {
       protocol: zkProof.protocol,
       curve: zkProof.curve,
       publicInputs: zkProof.publicInputs.length,
+      verifiedAgainstRealCommitment: zkVerified,
+      rejectsWrongToken: !zkRejectsWrongToken,
+      rejectsStaleChallenge: !zkRejectsStaleChallenge,
       benefit: 'Proves token validity without revealing token',
     },
   });

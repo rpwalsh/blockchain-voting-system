@@ -221,7 +221,7 @@ async function seed() {
     const votingTokenHash = crypto.hashVotingToken(votingToken);
     const voterKeys = crypto.generateKeyPair();
     const challenge = crypto.generateChallenge();
-    const registrationProof = crypto.generateTokenValidityProof(votingToken, challenge);
+    const registrationProof = await crypto.generateTokenValidityProof(votingToken, challenge);
 
     const state = BATTLEGROUND_STATES[i % BATTLEGROUND_STATES.length];
     const ipHash = crypto.hashIPAddress(`10.0.${Math.floor(i / 256)}.${i % 256}`, '2024-11-05');
@@ -260,7 +260,7 @@ async function seed() {
     // Encrypt vote
     const encryptedVote = crypto.encryptVote(selectedCandidate.id, election.publicKey);
     const validCandidateIds = candidates.map(c => c.id);
-    const voteProof = crypto.generateVoteValidityProof(encryptedVote, validCandidateIds);
+    const voteProof = await crypto.generateVoteValidityProof(encryptedVote, validCandidateIds);
 
     // Create receipt
     const voteData = JSON.stringify({ encryptedVote, timestamp: Date.now() });

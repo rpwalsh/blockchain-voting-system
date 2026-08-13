@@ -155,7 +155,7 @@ describe('E2E: Complete Voting Flow', () => {
             identityHash: crypto.createIdentityHash(`voter-${i}`, crypto.generateChallenge()),
             votingTokenHash: tokenHash,
             publicKey: voterKeyPair.publicKey,
-            registrationProof: crypto.generateTokenValidityProof(votingToken, crypto.generateChallenge()).proof,
+            registrationProof: (await crypto.generateTokenValidityProof(votingToken, crypto.generateChallenge())).proof,
           },
         });
         
@@ -201,7 +201,7 @@ describe('E2E: Complete Voting Flow', () => {
         
         // Generate proofs
         const tokenHash = crypto.hashVotingToken(votingToken);
-        const voteProof = crypto.generateTokenValidityProof(votingToken, crypto.generateChallenge()).proof;
+        const voteProof = (await crypto.generateTokenValidityProof(votingToken, crypto.generateChallenge())).proof;
         const receiptHash = crypto.createReceiptHash(encrypted.ciphertext);
         const ledgerEntryHash = crypto.createReceiptHash(receiptHash + Date.now());
         

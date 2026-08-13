@@ -44,33 +44,22 @@ describe('Cryptography Engine - Key Generation', () => {
   });
 
   test('should generate cryptographically secure voting tokens', () => {
-    // Note: generateVotingToken has strict entropy check (7.5 bits/byte)
-    // For a 32-byte buffer with 256 unique values, entropy can vary
-    // We use a helper to generate tokens with retry
-    const generateTokenWithRetry = (maxRetries = 10): string | null => {
-      for (let i = 0; i < maxRetries; i++) {
-        try {
-          return crypto.generateVotingToken();
-        } catch (e: any) {
-          if (e.message !== 'Insufficient entropy in token generation') {
-            throw e;
-          }
-        }
-      }
-      return null;
-    };
-    
-    const token1 = generateTokenWithRetry();
-    const token2 = generateTokenWithRetry();
-    
-    // At least one should succeed (typically both will)
-    if (token1 || token2) {
-      if (token1) expect(token1.length).toBeGreaterThan(40);
-      if (token2) expect(token2.length).toBeGreaterThan(40);
-      if (token1 && token2) expect(token1).not.toBe(token2);
-    } else {
-      // If both fail after multiple retries, there may be a system entropy issue
-      console.warn('Token generation failed - possible low system entropy');
+    const token1 = crypto.generateVotingToken();
+    const token2 = crypto.generateVotingToken();
+
+    expect(token1.length).toBeGreaterThan(40);
+    expect(token2.length).toBeGreaterThan(40);
+    expect(token1).not.toBe(token2);
+  });
+
+  test('generateVotingToken never throws (regression: it used to, always)', () => {
+    // generateVotingToken briefly had a per-token Shannon entropy self-check
+    // that was mathematically incapable of passing for a 32-byte sample
+    // (max achievable empirical entropy for n=32 is log2(32)=5 bits, the
+    // check required 7.5) - it rejected 100% of real randomBytes() output.
+    // See the note on generateVotingToken in crypto/engine.ts.
+    for (let i = 0; i < 25; i++) {
+      expect(() => crypto.generateVotingToken()).not.toThrow();
     }
   });
 });
@@ -252,10 +241,10 @@ describe('Cryptography Engine - Zero-Knowledge Proofs', () => {
   // Use fixed test token to avoid entropy issues
   const testToken = 'VGVzdFRva2VuRm9yWktQcm9vZlRlc3RpbmdBYmM=';
   
-  test('should generate ZK proof for valid token', () => {
+  test('should generate ZK proof for valid token', async () => {
     const challenge = crypto.generateChallenge();
-    const proof = crypto.generateTokenValidityProof(testToken, challenge);
-    
+    const proof = await crypto.generateTokenValidityProof(testToken, challenge);
+
     expect(proof.proof).toBeDefined();
     expect(proof.publicInputs).toBeInstanceOf(Array);
     expect(proof.version).toBeDefined();
@@ -263,36 +252,37 @@ describe('Cryptography Engine - Zero-Knowledge Proofs', () => {
     expect(proof.curve).toBe('bn128');
   });
 
-  test('should verify valid ZK proof with correct publicInputs', () => {
+  test('should verify valid ZK proof with correct publicInputs', async () => {
     const challenge = crypto.generateChallenge();
-    const proof = crypto.generateTokenValidityProof(testToken, challenge);
-    
-    // In the framework implementation, publicInputs contains hash of witness
-    // Use the same publicInput that was generated
-    const isValid = crypto.verifyZKProof(proof, null, proof.publicInputs);
-    
+    const proof = await crypto.generateTokenValidityProof(testToken, challenge);
+
+    // Raw pairing check against the circuit's own public signals
+    // ([validityFlag, nullifier, tokenHashCommitment, challengeHash]) -
+    // should pass real Groth16 verification regardless of what they mean.
+    const isValid = await crypto.verifyZKProof(proof, proof.publicInputs);
+
     expect(isValid).toBe(true);
   });
 
-  test('should reject ZK proof with mismatched publicInputs', () => {
+  test('should reject ZK proof with mismatched publicInputs', async () => {
     const challenge = crypto.generateChallenge();
-    const proof = crypto.generateTokenValidityProof(testToken, challenge);
-    
+    const proof = await crypto.generateTokenValidityProof(testToken, challenge);
+
     // Use wrong public inputs
-    const wrongInputs = ['wrong-hash-value'];
-    const isValid = crypto.verifyZKProof(proof, null, wrongInputs);
-    
+    const wrongInputs = ['1234567890123456789'];
+    const isValid = await crypto.verifyZKProof(proof, wrongInputs);
+
     expect(isValid).toBe(false);
   });
 
-  test('should reject ZK proof with different input length', () => {
+  test('should reject ZK proof with different input length', async () => {
     const challenge = crypto.generateChallenge();
-    const proof = crypto.generateTokenValidityProof(testToken, challenge);
-    
+    const proof = await crypto.generateTokenValidityProof(testToken, challenge);
+
     // Use wrong number of public inputs
-    const wrongInputs = ['input1', 'input2'];
-    const isValid = crypto.verifyZKProof(proof, null, wrongInputs);
-    
+    const wrongInputs = ['1', '2'];
+    const isValid = await crypto.verifyZKProof(proof, wrongInputs);
+
     expect(isValid).toBe(false);
   });
 });

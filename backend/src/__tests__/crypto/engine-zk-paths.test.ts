@@ -1,161 +1,129 @@
 /**
  * ZK-SNARK Path Coverage Tests
- * Tests for uncovered Groth16 circuit paths
+ *
+ * These run against the real compiled token_validity circuit under
+ * circuits/build/ (see circuits/README.md) - no fs/snarkjs mocking.
+ * A real Groth16 proof is generated and verified on every run.
  */
 
 import * as crypto from '../../crypto/engine';
-import * as fs from 'fs';
-
-// Mock fs
-jest.mock('fs');
-
-// Mock path module
-jest.mock('path', () => ({
-  resolve: jest.fn((...paths: string[]) => paths.join('/')),
-  join: jest.fn((...paths: string[]) => paths.join('/')),
-}));
 
 describe('Crypto Engine - ZK-SNARK Paths', () => {
-  const mockFs = fs as jest.Mocked<typeof fs>;
+  describe('token_validity circuit (real Groth16)', () => {
+    it('generates a real Groth16 proof for a voting token', async () => {
+      const token = crypto.generateVotingToken();
+      const challenge = crypto.generateChallenge();
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  describe('generateZKProof with circuit files', () => {
-    it('should use Groth16 path when circuit files exist', () => {
-      // Simulate circuit files existing
-      mockFs.existsSync.mockImplementation((filePath: any) => {
-        return filePath.includes('token_validity') || filePath.includes('.zkey');
-      });
-
-      const witness = { tokenHash: 'hash123', challenge: 'challenge456' };
-      const provingKey = 'pk';
-      const circuit = 'token_validity';
-
-      const proof = crypto.generateZKProof(witness, provingKey, circuit);
+      const proof = await crypto.generateTokenValidityProof(token, challenge);
 
       expect(proof.protocol).toBe('groth16');
       expect(proof.curve).toBe('bn128');
-      expect(proof.version).toBe('snarkjs-0.7.x');
-      expect(proof.publicInputs).toHaveLength(1);
+      // [validityFlag, nullifier, tokenHashCommitment, challengeHash]
+      expect(proof.publicInputs).toHaveLength(4);
+      expect(proof.publicInputs[0]).toBe('1');
+      const parsed = JSON.parse(proof.proof);
+      expect(parsed.pi_a).toBeDefined();
+      expect(parsed.pi_b).toBeDefined();
+      expect(parsed.pi_c).toBeDefined();
     });
 
-    it('should handle Groth16 proof generation error and fallback', () => {
-      // Simulate circuit files existing but error during generation
-      mockFs.existsSync.mockImplementation(() => true);
+    it('verifies a real proof against the token\'s commitment and the issued challenge', async () => {
+      const token = crypto.generateVotingToken();
+      const challenge = crypto.generateChallenge();
+      const proof = await crypto.generateTokenValidityProof(token, challenge);
+      const commitment = await crypto.computeTokenCommitment(token);
 
-      const witness = { tokenHash: 'hash', challenge: 'ch' };
-      const proof = crypto.generateZKProof(witness, 'pk', 'token_validity');
-
-      // Should fallback to Fiat-Shamir if Groth16 fails
-      expect(proof.protocol).toBe('groth16');
-      expect(proof.proof).toBeDefined();
+      const verified = await crypto.verifyTokenValidityProof(proof, commitment, challenge);
+      expect(verified).toBe(true);
     });
 
-    it('should use Fiat-Shamir fallback when circuits missing', () => {
-      mockFs.existsSync.mockImplementation(() => false);
+    it('rejects a valid proof checked against the wrong token commitment', async () => {
+      const token = crypto.generateVotingToken();
+      const otherToken = crypto.generateVotingToken();
+      const challenge = crypto.generateChallenge();
+      const proof = await crypto.generateTokenValidityProof(token, challenge);
+      const wrongCommitment = await crypto.computeTokenCommitment(otherToken);
 
-      const witness = { data: 'test' };
-      const proof = crypto.generateZKProof(witness, 'pk', 'circuit');
-
-      expect(proof.protocol).toBe('groth16');
-      expect(proof.publicInputs).toBeDefined();
-    });
-  });
-
-  describe('verifyZKProof with verification key', () => {
-    it('should use Groth16 verification path when vkey exists', () => {
-      mockFs.existsSync.mockImplementation((filePath: any) => {
-        return filePath.includes('verification_key.json');
-      });
-
-      const proof: crypto.ZKProof = {
-        proof: 'proof-data',
-        publicInputs: ['input1', 'input2'],
-        curve: 'bn128',
-        protocol: 'groth16',
-        version: '1.0',
-      };
-
-      const result = crypto.verifyZKProof(proof, {}, ['input1', 'input2']);
-      expect(result).toBe(true);
+      const verified = await crypto.verifyTokenValidityProof(proof, wrongCommitment, challenge);
+      expect(verified).toBe(false);
     });
 
-    it('should reject proof with wrong publicInputs length', () => {
-      mockFs.existsSync.mockImplementation(() => true);
+    it('rejects a valid proof checked against a stale (different) challenge', async () => {
+      const token = crypto.generateVotingToken();
+      const challenge = crypto.generateChallenge();
+      const proof = await crypto.generateTokenValidityProof(token, challenge);
+      const commitment = await crypto.computeTokenCommitment(token);
 
-      const proof: crypto.ZKProof = {
-        proof: 'proof-data',
-        publicInputs: ['input1'],
-        curve: 'bn128',
-        protocol: 'groth16',
-        version: '1.0',
-      };
-
-      const result = crypto.verifyZKProof(proof, {}, ['input1', 'input2']);
-      expect(result).toBe(false);
+      const verified = await crypto.verifyTokenValidityProof(proof, commitment, crypto.generateChallenge());
+      expect(verified).toBe(false);
     });
 
-    it('should reject proof with mismatched publicInputs', () => {
-      mockFs.existsSync.mockImplementation(() => true);
+    it('rejects a tampered proof even against the correct commitment and challenge', async () => {
+      const token = crypto.generateVotingToken();
+      const challenge = crypto.generateChallenge();
+      const proof = await crypto.generateTokenValidityProof(token, challenge);
+      const commitment = await crypto.computeTokenCommitment(token);
 
-      const proof: crypto.ZKProof = {
-        proof: 'proof-data',
-        publicInputs: ['wrong'],
-        curve: 'bn128',
-        protocol: 'groth16',
-        version: '1.0',
-      };
+      const forgedProof = JSON.parse(proof.proof);
+      forgedProof.pi_a[0] = '1';
+      const tampered = { ...proof, proof: JSON.stringify(forgedProof) };
 
-      const result = crypto.verifyZKProof(proof, {}, ['correct']);
-      expect(result).toBe(false);
+      const verified = await crypto.verifyTokenValidityProof(tampered, commitment, challenge);
+      expect(verified).toBe(false);
     });
 
-    it('should handle verification error gracefully', () => {
-      // Mock to return false initially to skip Groth16 path
-      mockFs.existsSync.mockImplementation(() => false);
-
-      const proof: crypto.ZKProof = {
-        proof: 'test',
-        publicInputs: [],
-        curve: 'bn128',
-        protocol: 'groth16',
-        version: '1.0',
-      };
-
-      // Should use fallback verification without throwing
-      const result = crypto.verifyZKProof(proof, {}, []);
-      expect(typeof result).toBe('boolean');
+    it('produces a different commitment for different tokens', async () => {
+      const a = await crypto.computeTokenCommitment(crypto.generateVotingToken());
+      const b = await crypto.computeTokenCommitment(crypto.generateVotingToken());
+      expect(a).not.toBe(b);
     });
 
-    it('should use fallback verification when vkey missing', () => {
-      mockFs.existsSync.mockImplementation(() => false);
+    it('produces a different nullifier for the same token across two challenges (anti-replay)', async () => {
+      const token = crypto.generateVotingToken();
+      const proofA = await crypto.generateTokenValidityProof(token, crypto.generateChallenge());
+      const proofB = await crypto.generateTokenValidityProof(token, crypto.generateChallenge());
+      expect(proofA.publicInputs[1]).not.toBe(proofB.publicInputs[1]);
+    });
 
-      const proof: crypto.ZKProof = {
-        proof: 'test-proof',
-        publicInputs: ['input'],
-        curve: 'bn128',
-        protocol: 'groth16',
-        version: '1.0',
-      };
-
-      const result = crypto.verifyZKProof(proof, {}, ['input']);
-      expect(typeof result).toBe('boolean');
+    it('produces the same commitment for the same token across multiple proofs', async () => {
+      const token = crypto.generateVotingToken();
+      const commitmentA = await crypto.computeTokenCommitment(token);
+      const commitmentB = await crypto.computeTokenCommitment(token);
+      expect(commitmentA).toBe(commitmentB);
     });
   });
 
-  describe('Edge cases', () => {
-    it('should handle empty witness', () => {
-      mockFs.existsSync.mockImplementation(() => false);
-      const proof = crypto.generateZKProof({}, 'pk', 'circuit');
-      expect(proof).toBeDefined();
+  describe('uncompiled circuit fallback', () => {
+    it('falls back to a non-ZK commitment when no circuit is compiled for it', async () => {
+      const proof = await crypto.generateZKProof({ some: 'witness' }, null, 'not-a-real-circuit');
+      expect(proof.protocol).toBe('fiat-shamir-fallback');
     });
 
-    it('should handle special characters in circuit name', () => {
-      mockFs.existsSync.mockImplementation(() => false);
-      const proof = crypto.generateZKProof({ test: 'data' }, 'pk', 'circuit-name_v2');
-      expect(proof.protocol).toBe('groth16');
+    it('never accepts a fallback proof as a verified Groth16 proof', async () => {
+      const proof = await crypto.generateZKProof({ some: 'witness' }, null, 'not-a-real-circuit');
+      const verified = await crypto.verifyZKProof(proof, proof.publicInputs);
+      expect(verified).toBe(false);
+    });
+
+    it('generateVoteValidityProof uses the fallback (no vote-validity circuit compiled yet)', async () => {
+      const encryptedVote = crypto.encryptVote('candidate-1', crypto.generateElectionKeyPair().publicKey);
+      const proofJson = await crypto.generateVoteValidityProof(encryptedVote, ['candidate-1', 'candidate-2']);
+      const proof = JSON.parse(proofJson);
+      expect(proof.protocol).toBe('fiat-shamir-fallback');
+    });
+  });
+
+  describe('verifyZKProof protocol guard', () => {
+    it('rejects non-groth16 proofs outright, regardless of publicInputs', async () => {
+      const fakeProof: crypto.ZKProof = {
+        proof: 'anything',
+        publicInputs: ['x'],
+        curve: 'bn128',
+        protocol: 'fiat-shamir-fallback',
+        version: 'uncompiled-circuit',
+      };
+      const verified = await crypto.verifyZKProof(fakeProof, ['x']);
+      expect(verified).toBe(false);
     });
   });
 });
