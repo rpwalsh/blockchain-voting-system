@@ -14,6 +14,8 @@ import superadminRoutes from './routes/superadmin';
 import governanceRoutes from "./routes/governance";
 import ballotRoutes from './routes/ballot';
 import finalizationRoutes from './routes/finalization';
+import eligibilityRoutes from './routes/eligibility';
+import tallyRoutes from './routes/tally';
 import { errorHandler } from './middleware/errorHandler';
 import { logger } from './utils/logger';
 
@@ -64,6 +66,8 @@ app.use('/api/superadmin', superadminRoutes);
 app.use('/api/governance', governanceRoutes);
 app.use('/api/elections', ballotRoutes);
 app.use('/api/elections', finalizationRoutes);
+app.use('/api/elections', eligibilityRoutes);
+app.use('/api/elections', tallyRoutes);
 
 // Election API routes (inline for now to avoid circular import)
 app.get('/api/election', async (req: Request, res: Response) => {

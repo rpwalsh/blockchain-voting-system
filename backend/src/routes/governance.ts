@@ -18,6 +18,7 @@ import jwt, { SignOptions } from 'jsonwebtoken';
 import { prisma } from '../db';
 import crypto from '../crypto/engine';
 import { domainHash, DOMAIN } from '../crypto/canonical';
+import tally from '../crypto/tally';
 import { requireAuth, requireOrgRole, requireSuperAdmin, AuthedRequest } from '../middleware/auth';
 import { loadConfig } from '../config';
 
@@ -702,6 +703,13 @@ router.post('/elections', requireAuth, requireOrgRole(['ORG_ADMIN', 'ELECTION_OF
     const signingKeyPair = crypto.generateKeyPair();
     const keyShares = crypto.splitSecretShamir(electionKeyPair.privateKey, 3, 5);
 
+    // Tally keypair: unlike the keys above, the private scalar is never
+    // persisted anywhere - only Shamir shares over the curve's scalar
+    // field (see crypto/tally.ts). Tallying always goes through combining
+    // >= tallyThreshold partial decryptions, never a stored plaintext key.
+    const tallyKeyPair = tally.generateTallyKeyPair();
+    const tallyShares = tally.splitScalarShamir(tallyKeyPair.privateKey, 3, 5);
+
     const created = await prisma.$transaction(async tx => {
       const election = await tx.election.create({
         data: {
@@ -719,6 +727,9 @@ router.post('/elections', requireAuth, requireOrgRole(['ORG_ADMIN', 'ELECTION_OF
           keyShares: JSON.stringify(keyShares),
           signingPublicKey: signingKeyPair.publicKey,
           signingPrivateKey: signingKeyPair.privateKey,
+          tallyPublicKey: JSON.stringify(tallyKeyPair.publicKey),
+          tallyKeyShares: JSON.stringify(tallyShares),
+          tallyThreshold: 3,
         },
       });
 

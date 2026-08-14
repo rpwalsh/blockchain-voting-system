@@ -18,6 +18,7 @@
 import express from 'express';
 import { prisma } from '../index';
 import crypto from '../crypto/engine';
+import tally from '../crypto/tally';
 import bcrypt from 'bcrypt';
 import speakeasy from 'speakeasy';
 import { logger } from '../utils/logger';
@@ -414,6 +415,10 @@ router.post('/elections', requireSuperAdmin, async (req, res, next) => {
     const signingKeys = crypto.generateKeyPair();
     const keyShares = crypto.splitSecretShamir(electionKeys.privateKey, 3, 5);
     const privateKeyHash = crypto.hashVotingToken(electionKeys.privateKey);
+    // Tally key: only Shamir shares are persisted, never the plaintext
+    // scalar - see crypto/tally.ts.
+    const tallyKeys = tally.generateTallyKeyPair();
+    const tallyShares = tally.splitScalarShamir(tallyKeys.privateKey, 3, 5);
 
     // Create election with candidates in transaction
     const election = await prisma.$transaction(async (tx) => {
@@ -432,6 +437,9 @@ router.post('/elections', requireSuperAdmin, async (req, res, next) => {
           keyShares: JSON.stringify(keyShares),
           signingPublicKey: signingKeys.publicKey,
           signingPrivateKey: signingKeys.privateKey,
+          tallyPublicKey: JSON.stringify(tallyKeys.publicKey),
+          tallyKeyShares: JSON.stringify(tallyShares),
+          tallyThreshold: 3,
           createdBy: org.createdBy || (req as any).superAdmin.id,
         },
       });
