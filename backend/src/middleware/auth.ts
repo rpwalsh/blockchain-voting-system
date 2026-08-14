@@ -1,7 +1,12 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
+import { loadConfig } from '../config';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production-2024';
+// This is the middleware that gates every protected route (requireAuth,
+// requireSuperAdmin, requireOrgRole). It uses the shared, validated
+// JWT_SECRET from config.ts, which throws rather than falling back to a
+// placeholder secret.
+const JWT_SECRET = loadConfig().jwtSecret;
 
 export type AuthActorType = 'USER' | 'SUPER_ADMIN';
 

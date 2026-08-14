@@ -12,6 +12,8 @@ import electionDataRoutes from './routes/election-data';
 import cryptoAuditRoutes from './routes/crypto-audit';
 import superadminRoutes from './routes/superadmin';
 import governanceRoutes from "./routes/governance";
+import ballotRoutes from './routes/ballot';
+import finalizationRoutes from './routes/finalization';
 import { errorHandler } from './middleware/errorHandler';
 import { logger } from './utils/logger';
 
@@ -60,6 +62,8 @@ app.use('/api/election-data', electionDataRoutes);
 app.use('/api/crypto-audit', cryptoAuditRoutes);
 app.use('/api/superadmin', superadminRoutes);
 app.use('/api/governance', governanceRoutes);
+app.use('/api/elections', ballotRoutes);
+app.use('/api/elections', finalizationRoutes);
 
 // Election API routes (inline for now to avoid circular import)
 app.get('/api/election', async (req: Request, res: Response) => {

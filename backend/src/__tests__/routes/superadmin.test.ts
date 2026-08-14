@@ -5,10 +5,13 @@
 
 import request from 'supertest';
 import express from 'express';
+import jwt from 'jsonwebtoken';
+import speakeasy from 'speakeasy';
 import { prisma } from '../../index';
 import superadminRoutes from '../../routes/superadmin';
 import bcrypt from 'bcrypt';
 import crypto from '../../crypto/engine';
+import { loadConfig } from '../../config';
 
 // Mock dependencies
 jest.mock('../../index', () => ({
@@ -88,19 +91,26 @@ app.use(express.json());
 app.use('/api/superadmin', superadminRoutes);
 
 describe('Super Admin Routes', () => {
-  const validToken = 'valid-super-admin-token';
   const mockSuperAdmin = {
     id: 'super-admin-1',
     username: 'admin',
     passwordHash: 'hashed-password',
-    sessionToken: validToken,
+    totpSecret: speakeasy.generateSecret().base32,
+    sessionToken: 'legacy-field-not-used-for-auth',
     lastLoginAt: new Date(),
     lastLoginIp: 'hashed-ip',
   };
+  // requireSuperAdmin (routes/superadmin.ts) verifies a real JWT, not a
+  // sessionToken lookup - sign one the same way login issues it.
+  const validToken = jwt.sign(
+    { superAdminId: mockSuperAdmin.id, role: 'SUPER_ADMIN', level: 12 },
+    loadConfig().jwtSecret
+  );
 
   beforeEach(() => {
     jest.clearAllMocks();
     (prisma.superAdmin.findFirst as jest.Mock).mockResolvedValue(mockSuperAdmin);
+    (prisma.superAdmin.findUnique as jest.Mock).mockResolvedValue(mockSuperAdmin);
   });
 
   describe('POST /api/superadmin/login', () => {
@@ -155,14 +165,12 @@ describe('Super Admin Routes', () => {
 
   describe('GET /api/superadmin/dashboard', () => {
     it('should reject unauthorized access', async () => {
-      (prisma.superAdmin.findFirst as jest.Mock).mockResolvedValue(null);
-
       const response = await request(app)
         .get('/api/superadmin/dashboard')
         .set('Authorization', 'Bearer invalid-token');
 
       expect(response.status).toBe(401);
-      expect(response.body.error).toBe('Invalid super admin token');
+      expect(response.body.error).toBe('Invalid token');
     });
 
     it('should reject requests without auth header', async () => {

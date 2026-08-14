@@ -201,7 +201,9 @@ describe('Cryptography Engine - Merkle Tree', () => {
     expect(proof.proof).toBeInstanceOf(Array);
     expect(proof.leaf).toBeDefined();
     expect(proof.index).toBe(1);
-    expect(proof.algorithm).toBe('sha3-256');
+    // Domain-separated leaf/node hashing (RFC 6962-style fix) changed this
+    // label - see docs/protocol.md, "Stage: Ballot inclusion".
+    expect(proof.algorithm).toBe('sha3-256-domain-separated');
   });
 
   test('should verify valid Merkle proof', () => {
@@ -217,9 +219,7 @@ describe('Cryptography Engine - Merkle Tree', () => {
     const leaves = ['vote1', 'vote2', 'vote3', 'vote4'];
     const tree = new crypto.MerkleTree(leaves);
     const proof = tree.getProof(1);
-    
-    // Tamper with proof
-    proof.proof[0] = 'tampered-hash';
+    proof.siblings[0].hash = 'tampered-hash';
     const isValid = crypto.MerkleTree.verifyProof(proof);
     
     expect(isValid).toBe(false);

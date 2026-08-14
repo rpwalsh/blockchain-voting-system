@@ -284,8 +284,8 @@ Properties:
             <pre>{`
 ┌─────────────────────────────────────────────────────────────┐
 │                    ROOT OF TRUST                            │
-│              Hardware Security Module (HSM)                  │
-│                  FIPS 140-2 Level 3                         │
+│         Election signing/encryption keypair (Ed25519/NaCl)  │
+│      Shamir K-of-N shares generated; no HSM/KMS integration │
 └─────────────────────────┬───────────────────────────────────┘
                           │
           ┌───────────────┼───────────────┐
@@ -1082,14 +1082,12 @@ Proof:
             </table>
           </div>
 
-          <h3>11.3 Compliance Standards</h3>
-          <ul className="wp-list">
-            <li><strong>FIPS 140-2 Level 3:</strong> HSM key storage</li>
-            <li><strong>Common Criteria EAL4+:</strong> Security evaluation</li>
-            <li><strong>NIST SP 800-57:</strong> Key management</li>
-            <li><strong>EAC VVSG 2.0:</strong> Voting system guidelines</li>
-            <li><strong>GDPR Article 25:</strong> Privacy by design</li>
-          </ul>
+          <h3>11.3 Standards referenced</h3>
+          <p>
+            No compliance certifications (FIPS, Common Criteria, SOC 2, EAC VVSG, etc.)
+            are held or claimed. See docs/security-validation.md for an honest
+            audit-readiness assessment.
+          </p>
         </div>
       </section>
 

@@ -19,14 +19,20 @@ import express from 'express';
 import { prisma } from '../index';
 import crypto from '../crypto/engine';
 import bcrypt from 'bcrypt';
+import speakeasy from 'speakeasy';
 import { logger } from '../utils/logger';
 
 const router = express.Router();
 
 // Middleware: Verify Level 12 Super Admin via JWT
 import jwt from 'jsonwebtoken';
+import { loadConfig } from '../config';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+// Third independent insecure JWT fallback found in this codebase (see
+// middleware/auth.ts and routes/auth.ts for the same pattern, fixed the
+// same way) - using the shared, validated config instead of a fallback
+// literal in source.
+const JWT_SECRET = loadConfig().jwtSecret;
 
 async function requireSuperAdmin(req: any, res: any, next: any) {
   try {
@@ -78,22 +84,34 @@ router.post('/login', async (req, res, next) => {
     const superAdmin = await prisma.superAdmin.findUnique({
       where: { username },
     });
-    
+
     if (!superAdmin) {
-      // Constant-time delay to prevent timing attacks
-      await bcrypt.compare(password, 'enterprise_multi_tenant2benterprise_multi_tenant12enterprise_multi_tenantinvalidhashtopreventtiming');
+      // Constant-time delay to prevent timing attacks.
+      await bcrypt.compare(password, '$2b$12$invalidhashinvalidhashinvalidhashinvalidhashinvalidha');
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-    
+
     // Verify password
     const validPassword = await bcrypt.compare(password, superAdmin.passwordHash);
     if (!validPassword) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-    
-    // TODO: Verify TOTP code (requires speakeasy library)
-    // For now, accept any 6-digit code
-    if (!/^\\d{6}enterprise_multi_tenant/.test(totpCode)) {
+
+    // Real TOTP verification (otplib) - every SuperAdmin created via
+    // bootstrap-superadmin.ts has a real enrolled secret, so this is
+    // always enforced for real accounts. Accounts without a real secret
+    // (the sentinel 'not-configured') are refused rather than silently
+    // let through.
+    if (!superAdmin.totpSecret || superAdmin.totpSecret === 'not-configured') {
+      return res.status(403).json({ error: 'This account has no TOTP secret enrolled and cannot log in. Re-run bootstrap-superadmin.ts.' });
+    }
+    const totpValid = !!totpCode && speakeasy.totp.verify({
+      secret: superAdmin.totpSecret,
+      encoding: 'base32',
+      token: String(totpCode),
+      window: 1, // allow the previous/next 30s step for clock drift
+    });
+    if (!totpValid) {
       return res.status(401).json({ error: 'Invalid TOTP code' });
     }
     
@@ -169,12 +187,32 @@ router.get('/dashboard', requireSuperAdmin, async (req, res, next) => {
       }),
     ]);
     
-    // System health metrics
+    // System health metrics - each derived from an actual check, not a
+    // hardcoded literal (see docs/threat-model.md, "compromised server" -
+    // "report false integrity check status to auditors" for why a
+    // dashboard that always says HEALTHY regardless of reality is exactly
+    // the anti-pattern this project is trying to eliminate).
+    let databaseHealthy = false;
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      databaseHealthy = true;
+    } catch {
+      databaseHealthy = false;
+    }
+
+    let cryptoHealthy = false;
+    try {
+      const kp = crypto.generateKeyPair();
+      const sig = crypto.signData('health-check', kp.privateKey);
+      cryptoHealthy = crypto.verifySignature('health-check', sig, kp.publicKey);
+    } catch {
+      cryptoHealthy = false;
+    }
+
     const systemHealth = {
-      database: 'HEALTHY', // TODO: Check DB connection pool
-      cryptography: 'HEALTHY', // TODO: Run crypto self-tests
+      database: databaseHealthy ? 'HEALTHY' : 'UNHEALTHY',
+      cryptography: cryptoHealthy ? 'HEALTHY' : 'UNHEALTHY',
       api: 'HEALTHY',
-      storage: 'HEALTHY',
     };
     
     res.json({
@@ -367,10 +405,16 @@ router.post('/elections', requireSuperAdmin, async (req, res, next) => {
       return res.status(404).json({ error: 'Organization not found' });
     }
     
-    // Generate election keys
+    // Generate election keys. privateKey is stored in plaintext - no
+    // HSM/KMS integration exists in this codebase (see docs/cryptography.md).
+    // keyShares is a real Shamir K-of-N split (crypto.splitSecretShamir),
+    // populated as a genuine threshold-recovery safety net even though the
+    // decrypt path doesn't require share reconstruction yet.
     const electionKeys = crypto.generateElectionKeyPair();
-    const privateKeyHash = crypto.hashVotingToken(electionKeys.privateKey); // Use available hash function
-    
+    const signingKeys = crypto.generateKeyPair();
+    const keyShares = crypto.splitSecretShamir(electionKeys.privateKey, 3, 5);
+    const privateKeyHash = crypto.hashVotingToken(electionKeys.privateKey);
+
     // Create election with candidates in transaction
     const election = await prisma.$transaction(async (tx) => {
       const newElection = await tx.election.create({
@@ -383,22 +427,26 @@ router.post('/elections', requireSuperAdmin, async (req, res, next) => {
           startDate: startDate ? new Date(startDate) : new Date(),
           endDate: endDate ? new Date(endDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
           publicKey: electionKeys.publicKey,
-          privateKey: electionKeys.privateKey, // TODO: Encrypt with HSM/KMS
+          privateKey: electionKeys.privateKey,
           privateKeyHash,
+          keyShares: JSON.stringify(keyShares),
+          signingPublicKey: signingKeys.publicKey,
+          signingPrivateKey: signingKeys.privateKey,
           createdBy: org.createdBy || (req as any).superAdmin.id,
         },
       });
       
-      // Create candidates
+      // Create candidates. `c.biography` (legacy client field) maps to the
+      // Candidate model's `description` column; `order` is the array index.
       if (candidates.length > 0) {
         await tx.candidate.createMany({
           data: candidates.map((c: any, index: number) => ({
             electionId: newElection.id,
             name: c.name,
             party: c.party || null,
-            biography: c.biography || null,
+            description: c.biography || c.description || null,
             photoUrl: c.photoUrl || null,
-            position: index,
+            order: index,
           })),
         });
       }
@@ -826,28 +874,44 @@ router.post('/crypto-test', requireSuperAdmin, async (req, res, next) => {
  */
 router.get('/system-status', requireSuperAdmin, async (req, res, next) => {
   try {
+    // Same principle as /dashboard above: every status here is derived
+    // from an actual check, never a hardcoded literal.
+    let databaseHealthy = false;
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      databaseHealthy = true;
+    } catch {
+      databaseHealthy = false;
+    }
+
+    let cryptoHealthy = false;
+    try {
+      const kp = crypto.generateKeyPair();
+      cryptoHealthy = crypto.verifySignature('health-check', crypto.signData('health-check', kp.privateKey), kp.publicKey);
+    } catch {
+      cryptoHealthy = false;
+    }
+
     const status = {
-      version: '1.0.0-enterprise',
+      version: require('../../package.json').version,
       uptime: process.uptime(),
       memory: process.memoryUsage(),
       cpu: process.cpuUsage(),
       platform: process.platform,
       nodeVersion: process.version,
-      
+
       database: {
-        status: 'HEALTHY',
-        // TODO: Check connection pool
+        status: databaseHealthy ? 'HEALTHY' : 'UNHEALTHY',
       },
-      
+
       services: {
         api: 'HEALTHY',
-        crypto: 'HEALTHY',
-        storage: 'HEALTHY',
+        crypto: cryptoHealthy ? 'HEALTHY' : 'UNHEALTHY',
       },
-      
+
       timestamp: new Date(),
     };
-    
+
     res.json({ success: true, system: status });
   } catch (error) {
     next(error);

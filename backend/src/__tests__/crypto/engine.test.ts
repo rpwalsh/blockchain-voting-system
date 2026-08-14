@@ -390,12 +390,18 @@ describe('Blockchain Integration', () => {
       expect(anchor.merkleRoot).toBe(merkleRoot);
     });
 
-    it('should include transaction hash', () => {
+    it('is honestly labeled as a local simulation, not a real transaction', () => {
+      // generateBlockchainAnchor() is a local commitment digest only - see
+      // docs/cryptography.md. `transactionHash` and `blockNumber` are null,
+      // making explicit that no real transaction exists. Real anchoring is
+      // submitTimestampAnchor().
       const merkleRoot = sha3_256('votes-merkle-root');
       const anchor = generateBlockchainAnchor(merkleRoot, 'ethereum');
-      
-      expect(anchor).toHaveProperty('transactionHash');
-      expect(anchor.transactionHash).toBeTruthy();
+
+      expect(anchor.real).toBe(false);
+      expect(anchor.transactionHash).toBeNull();
+      expect(anchor.blockNumber).toBeNull();
+      expect(anchor.localCommitment).toBeTruthy();
     });
 
     it('should create different anchors for different roots', () => {

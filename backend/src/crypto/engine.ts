@@ -1,31 +1,21 @@
 /**
- * ENTERPRISE-GRADE CRYPTOGRAPHY ENGINE
- * ====================================
- * Security Level: Nation-state + Corporate + Federal + International
- * Series A Ready: Advanced cryptography with proper ZK-SNARKs foundation
- * 
- * ADVANCED FEATURES:
- * - zk-SNARKs ready (circom/snarkjs integration points)
- * - Threshold cryptography (Shamir Secret Sharing)
- * - Post-quantum consideration (CRYSTALS-Kyber upgrade path)
- * - Multi-party computation (MPC) framework
- * - Blockchain anchoring (Ethereum/Hyperledger)
- * - Graph-based vote verification (DAG structure)
- * - Hardened traffic analysis resistance
- * 
- * COMPLIANCE:
- * - NIST SP 800-57/90A/140-2 (cryptographic standards)
- * - Common Criteria EAL4+ (security evaluation)
- * - FIPS 140-3 Level 2+ (cryptographic modules)
- * - SOC 2 Type II (security controls)
- * - ISO 27001 (information security)
- * - GDPR/CCPA (data protection)
+ * Cryptography engine for the election protocol.
+ *
+ * See docs/cryptography.md for an honest per-primitive breakdown of what's
+ * real vs. fallback here - in particular, the token_validity Groth16 circuit
+ * is real; vote-validity and tally-correctness proofs are not implemented
+ * yet (fiat-shamir-fallback only), and generateBlockchainAnchor() is a
+ * locally-computed digest, not a real chain transaction. This file makes
+ * no compliance or certification claims (no FIPS, Common Criteria, SOC 2,
+ * ISO 27001, etc). Using NIST-recommended algorithms (true, see below) is
+ * not the same claim as holding a certification.
  */
 
 import * as nacl from 'tweetnacl';
 import * as naclUtil from 'tweetnacl-util';
 import { randomBytes, timingSafeEqual, createHash, pbkdf2Sync } from 'crypto';
 import { sha3_256, sha3_512 } from 'js-sha3';
+import { DOMAIN, domainHashRaw } from './canonical';
 // @ts-ignore - snarkjs doesn't have complete TypeScript definitions
 const snarkjs = require('snarkjs');
 const { groth16 } = snarkjs;
@@ -122,11 +112,11 @@ export interface ZKProof {
 
 export interface MerkleProof {
   root: string;
-  proof: string[];
+  proof: string[]; // display/size only - verifyProof checks `siblings`, not this
   leaf: string;
   index: number;
   algorithm: string;
-  siblings: { left: boolean; hash: string }[]; // Enhanced structure
+  siblings: { left: boolean; hash: string; empty?: boolean }[]; // empty: node promoted unchanged (odd level), not a hashed pair
 }
 
 export interface ThresholdKeyShare {
@@ -139,9 +129,16 @@ export interface ThresholdKeyShare {
 
 export interface BlockchainAnchor {
   merkleRoot: string;
-  blockNumber: number;
-  transactionHash: string;
-  blockchain: string; // ethereum, hyperledger, etc
+  /** true only if this anchor was actually submitted to and confirmed by
+   * a real chain. See docs/cryptography.md, "On the blockchain anchor". */
+  real: boolean;
+  blockNumber: number | null;
+  transactionHash: string | null;
+  /** Always present: a local commitment digest, independent of whether a
+   * real chain transaction exists. This is what verification should check
+   * today, since `real` is currently always false. */
+  localCommitment: string;
+  blockchain: string; // ethereum, hyperledger, etc - the *intended* target chain
   timestamp: number;
 }
 
@@ -301,18 +298,9 @@ function gfInverse(a: number): number {
 }
 
 /**
- * Generate a voting token.
- *
- * This used to run a per-token Shannon entropy self-check (reject the
- * output of randomBytes() if its empirical entropy looked "too low").
- * That check was removed: for a 32-byte sample, the maximum possible
- * empirical Shannon entropy is log2(32) = 5 bits (reached only when all
- * 32 bytes are distinct), never the ~7.5-8 bits the check required - so
- * it rejected 100% of real cryptographically random output, including
- * output from this exact randomBytes() call. Verified empirically:
- * 1000/1000 real samples failed the old check. randomBytes() is backed
- * by the OS CSPRNG and doesn't need (and can't usefully receive) a
- * runtime statistical self-test on individual 32-byte outputs.
+ * Generate a voting token. Backed directly by the OS CSPRNG via
+ * randomBytes(), with no additional runtime statistical self-test on
+ * individual outputs.
  */
 export function generateVotingToken(): string {
   const token = randomBytes(32);
@@ -517,11 +505,12 @@ export async function generateZKProof(
  */
 export async function verifyZKProof(
   proof: ZKProof,
-  publicInputs: string[]
+  publicInputs: string[],
+  circuit: string = 'token_validity'
 ): Promise<boolean> {
   if (proof.protocol !== 'groth16') return false;
 
-  const vkeyPath = './circuits/build/verification_key.json';
+  const vkeyPath = `./circuits/build/${circuit}_verification_key.json`;
   const fs = require('fs');
   const path = require('path');
 
@@ -609,6 +598,160 @@ export async function generateVoteValidityProof(encryptedVote: EncryptedVote, va
   return JSON.stringify(proof);
 }
 
+// ============================================================================
+// ANONYMOUS ELIGIBILITY (see circuits/eligibility.circom, docs/protocol.md
+// "Stage: Credential issuance")
+// ============================================================================
+
+const ELIGIBILITY_TREE_LEVELS = 20;
+
+// Arbitrary strings (UUIDs, not base64) reduced into the BN254 scalar
+// field via SHA3-256 - stringToFieldElement's base64 decoding would
+// silently mangle a UUID instead of throwing.
+function utf8ToFieldElement(value: string): bigint {
+  const hex = sha3_256(value);
+  return BigInt('0x' + hex) % BN254_SCALAR_FIELD;
+}
+
+// Generates a fresh eligibility credential: a random secret and its
+// Poseidon commitment (salt derived from the secret, same pattern as
+// computeTokenCommitment - the voter only needs to retain the secret).
+export async function generateEligibilityCredential(): Promise<{ secret: string; commitment: string }> {
+  const secret = naclUtil.encodeBase64(randomBytes(32));
+  const commitment = await computeEligibilityCommitment(secret);
+  return { secret, commitment };
+}
+
+export async function computeEligibilityCommitment(secret: string): Promise<string> {
+  const poseidon = await getPoseidon();
+  const secretField = stringToFieldElement(secret);
+  const saltField = await deriveSaltField(secretField);
+  return poseidon.F.toString(poseidon([secretField, saltField]));
+}
+
+export class PoseidonMerkleTree {
+  private levels: number;
+  private zeroHashes: bigint[] = [];
+  private realLayers: bigint[][] = [];
+  private ready: Promise<void>;
+
+  constructor(leaves: string[], levels: number = ELIGIBILITY_TREE_LEVELS) {
+    this.levels = levels;
+    this.ready = this.build(leaves.map(l => BigInt(l)));
+  }
+
+  private async build(leaves: bigint[]): Promise<void> {
+    const poseidon = await getPoseidon();
+    const hash2 = (a: bigint, b: bigint) => BigInt(poseidon.F.toString(poseidon([a, b])));
+
+    this.zeroHashes = [0n];
+    for (let i = 0; i < this.levels; i++) {
+      this.zeroHashes.push(hash2(this.zeroHashes[i], this.zeroHashes[i]));
+    }
+
+    this.realLayers = [leaves];
+    let current = leaves;
+    for (let level = 0; level < this.levels && current.length > 1; level++) {
+      const next: bigint[] = [];
+      for (let i = 0; i < current.length; i += 2) {
+        const left = current[i];
+        const right = i + 1 < current.length ? current[i + 1] : this.zeroHashes[level];
+        next.push(hash2(left, right));
+      }
+      this.realLayers.push(next);
+      current = next;
+    }
+  }
+
+  async getRoot(): Promise<string> {
+    await this.ready;
+    const topLevel = this.realLayers.length - 1;
+    let hash = this.realLayers[topLevel][0] ?? this.zeroHashes[0];
+    const poseidon = await getPoseidon();
+    for (let level = topLevel; level < this.levels; level++) {
+      hash = BigInt(poseidon.F.toString(poseidon([hash, this.zeroHashes[level]])));
+    }
+    return hash.toString();
+  }
+
+  async getProof(index: number): Promise<{ pathElements: string[]; pathIndices: number[] }> {
+    await this.ready;
+    const pathElements: string[] = [];
+    const pathIndices: number[] = [];
+    let idx = index;
+
+    for (let level = 0; level < this.realLayers.length - 1; level++) {
+      const layer = this.realLayers[level];
+      const isRight = idx % 2 === 1;
+      const siblingIdx = isRight ? idx - 1 : idx + 1;
+      const sibling = siblingIdx < layer.length ? layer[siblingIdx] : this.zeroHashes[level];
+      pathElements.push(sibling.toString());
+      pathIndices.push(isRight ? 1 : 0);
+      idx = Math.floor(idx / 2);
+    }
+
+    // Above the point where real leaves collapse to a single node, this
+    // branch is always the left side of an otherwise-empty subtree.
+    for (let level = this.realLayers.length - 1; level < this.levels; level++) {
+      pathElements.push(this.zeroHashes[level].toString());
+      pathIndices.push(0);
+    }
+
+    return { pathElements, pathIndices };
+  }
+}
+
+/**
+ * Generate a real Groth16 proof of anonymous eligibility: proves
+ * membership of `secret`'s commitment in the tree at `merkleRoot` without
+ * revealing which leaf, and outputs a nullifier bound to `electionId`. See
+ * circuits/eligibility.circom.
+ *
+ * Public signals (in order): [nullifier, merkleRoot, electionId]
+ */
+export async function generateEligibilityProof(
+  secret: string,
+  electionId: string,
+  merkleRoot: string,
+  pathElements: string[],
+  pathIndices: number[]
+): Promise<ZKProof> {
+  const secretField = stringToFieldElement(secret);
+  const saltField = await deriveSaltField(secretField);
+  const electionField = utf8ToFieldElement(electionId);
+
+  const witness = {
+    merkleRoot,
+    electionId: electionField.toString(),
+    secret: secretField.toString(),
+    salt: saltField.toString(),
+    pathElements,
+    pathIndices,
+  };
+  return generateZKProof(witness, null, 'eligibility');
+}
+
+/**
+ * Verify an eligibility proof against the election's current eligibility
+ * root and electionId. Returns the nullifier on success so the caller can
+ * check/record it, or null if the proof doesn't verify.
+ */
+export async function verifyEligibilityProof(
+  proof: ZKProof,
+  expectedRoot: string,
+  electionId: string
+): Promise<string | null> {
+  if (proof.publicInputs.length !== 3) return null;
+  const [nullifier, merkleRoot, electionField] = proof.publicInputs;
+  const expectedElectionField = utf8ToFieldElement(electionId).toString();
+
+  if (!constantTimeEqual(merkleRoot, expectedRoot)) return null;
+  if (!constantTimeEqual(electionField, expectedElectionField)) return null;
+
+  const valid = await verifyZKProof(proof, proof.publicInputs, 'eligibility');
+  return valid ? nullifier : null;
+}
+
 /**
  * Sign data with Ed25519
  */
@@ -617,6 +760,21 @@ export function signData(data: string, privateKey: string): string {
   const privateKeyBytes = naclUtil.decodeBase64(privateKey);
   const signature = nacl.sign.detached(dataBytes, privateKeyBytes);
   return naclUtil.encodeBase64(signature);
+}
+
+/**
+ * Derive the Ed25519 public key that corresponds to a given private key.
+ * nacl's sign secret key format already contains the public key (it's a
+ * 64-byte seed+publicKey pair), so this is exact, not a re-derivation from
+ * scratch. Use this - never a freshly generated unrelated keypair - when a
+ * caller needs "the public key for this private key" (see createLedgerEntry
+ * in utils/audit.ts, which stores the public key derived from the signing
+ * key so the stored signature verifies against its own record).
+ */
+export function derivePublicKey(privateKey: string): string {
+  const secretKeyBytes = naclUtil.decodeBase64(privateKey);
+  const keyPair = nacl.sign.keyPair.fromSecretKey(secretKeyBytes);
+  return naclUtil.encodeBase64(keyPair.publicKey);
 }
 
 /**
@@ -642,89 +800,112 @@ export function createReceiptHash(voteData: string): string {
 }
 
 /**
- * Enhanced Merkle Tree with DAG support
+ * Merkle tree, domain-separated per docs/cryptography.md (see
+ * docs/protocol.md, "Stage: Ballot inclusion" for the write-up).
+ *
+ * 1. Leaves and internal nodes are hashed under different domain tags
+ *    (ELECTION_MERKLE_LEAF vs ELECTION_MERKLE_NODE), preventing the classic
+ *    Merkle second-preimage weakness that RFC 6962 exists to prevent (an
+ *    attacker-crafted value hashed as a "leaf" could otherwise be confused
+ *    with a legitimate internal node hash, or vice versa).
+ * 2. An unpaired node at an odd-length level is promoted unchanged to the
+ *    next level instead of being duplicated and hashed with itself, which
+ *    avoids the CVE-2012-2459-class duplicate-node issue (hashing a node
+ *    with itself lets an attacker pad the leaf set in a way that produces
+ *    a colliding root for two different leaf sequences in some tree
+ *    shapes).
  */
 export class MerkleTree {
   private leaves: string[];
   private tree: string[][];
-  
+
   constructor(leaves: string[]) {
     if (leaves.length === 0) throw new Error('Empty tree');
-    this.leaves = leaves.map(leaf => sha3_256(leaf));
+    this.leaves = leaves.map(leaf => domainHashRaw(DOMAIN.ELECTION_MERKLE_LEAF, leaf));
     this.tree = this.buildTree();
   }
-  
+
   private buildTree(): string[][] {
     const tree: string[][] = [this.leaves];
-    
+
     while (tree[tree.length - 1].length > 1) {
       const currentLevel = tree[tree.length - 1];
       const nextLevel: string[] = [];
-      
+
       for (let i = 0; i < currentLevel.length; i += 2) {
-        const left = currentLevel[i];
-        const right = i + 1 < currentLevel.length ? currentLevel[i + 1] : left;
-        nextLevel.push(sha3_256(left + right));
+        if (i + 1 < currentLevel.length) {
+          const left = currentLevel[i];
+          const right = currentLevel[i + 1];
+          nextLevel.push(domainHashRaw(DOMAIN.ELECTION_MERKLE_NODE, left + right));
+        } else {
+          // Odd node out: promote unchanged rather than hashing it with
+          // itself (see class doc comment above).
+          nextLevel.push(currentLevel[i]);
+        }
       }
-      
+
       tree.push(nextLevel);
     }
-    
+
     return tree;
   }
-  
+
   getRoot(): string {
     return this.tree[this.tree.length - 1][0];
   }
-  
+
   getProof(index: number): MerkleProof {
     if (index < 0 || index >= this.leaves.length) {
       throw new Error('Index out of bounds');
     }
-    
+
     const proof: string[] = [];
-    const siblings: { left: boolean; hash: string }[] = [];
+    const siblings: { left: boolean; hash: string; empty?: boolean }[] = [];
     let currentIndex = index;
-    
+
     for (let level = 0; level < this.tree.length - 1; level++) {
       const currentLevel = this.tree[level];
       const isRightNode = currentIndex % 2 === 1;
       const siblingIndex = isRightNode ? currentIndex - 1 : currentIndex + 1;
-      
-      // When there's no sibling (odd number of nodes), use the current node itself
-      const siblingHash = siblingIndex < currentLevel.length 
-        ? currentLevel[siblingIndex] 
-        : currentLevel[currentIndex];
-      
+      const hasSibling = siblingIndex < currentLevel.length;
+
+      const siblingHash = hasSibling ? currentLevel[siblingIndex] : '';
+
       proof.push(siblingHash);
       siblings.push({
-        left: !isRightNode,
+        // true when the sibling sits to the left, i.e. the current node is the right child
+        left: isRightNode,
         hash: siblingHash,
+        empty: !hasSibling,
       });
-      
+
       currentIndex = Math.floor(currentIndex / 2);
     }
-    
+
     return {
       root: this.getRoot(),
       proof,
       leaf: this.leaves[index],
       index,
-      algorithm: 'sha3-256',
+      algorithm: 'sha3-256-domain-separated',
       siblings,
     };
   }
-  
+
   static verifyProof(merkleProof: MerkleProof): boolean {
     let hash = merkleProof.leaf;
     let index = merkleProof.index;
-    
-    for (const sibling of merkleProof.proof) {
-      const isRightNode = index % 2 === 1;
-      hash = isRightNode ? sha3_256(sibling + hash) : sha3_256(hash + sibling);
+
+    for (const sibling of merkleProof.siblings) {
+      if (!sibling.empty) {
+        hash = sibling.left
+          ? domainHashRaw(DOMAIN.ELECTION_MERKLE_NODE, sibling.hash + hash)
+          : domainHashRaw(DOMAIN.ELECTION_MERKLE_NODE, hash + sibling.hash);
+      }
+      // empty step: node was promoted unchanged, hash carries forward as-is
       index = Math.floor(index / 2);
     }
-    
+
     const hashBuffer = Buffer.from(hash);
     const rootBuffer = Buffer.from(merkleProof.root);
     return hashBuffer.length === rootBuffer.length && timingSafeEqual(hashBuffer, rootBuffer);
@@ -814,8 +995,14 @@ export function hashIPAddress(ipAddress: string, dailySalt: string): string {
 }
 
 /**
- * Generate blockchain anchor
- * ENTERPRISE: Anchor vote Merkle roots to public blockchain
+ * Compute a local commitment digest for a Merkle root, in the shape a real
+ * chain anchor would eventually fill in. This does NOT submit anything to
+ * Ethereum, Hyperledger, or any other chain - `real` is always `false` and
+ * `blockNumber`/`transactionHash` are always `null` until actual chain
+ * integration exists. See docs/cryptography.md, "On the blockchain
+ * anchor" - the localCommitment field is what verification should check
+ * today; treating this as a real transaction receipt would be exactly the
+ * security-theater pattern that document warns against.
  */
 export function generateBlockchainAnchor(
   merkleRoot: string,
@@ -823,10 +1010,86 @@ export function generateBlockchainAnchor(
 ): BlockchainAnchor {
   return {
     merkleRoot,
-    blockNumber: 0, // Placeholder - needs web3 integration
-    transactionHash: sha3_256(merkleRoot + Date.now().toString()),
+    real: false,
+    blockNumber: null,
+    transactionHash: null,
+    localCommitment: domainHashRaw(DOMAIN.ELECTION_LEDGER, merkleRoot + ':' + Date.now().toString()),
     blockchain,
     timestamp: Date.now(),
+  };
+}
+
+// @ts-ignore - opentimestamps ships incomplete/mismatched TS definitions for some exports
+const OpenTimestamps = require('opentimestamps');
+
+/**
+ * Real external timestamp anchoring via OpenTimestamps (see
+ * docs/cryptography.md, "On the external timestamp anchor"). This submits
+ * a hash to live, independent timestamp calendar servers
+ * (a.pool.opentimestamps.org and others), which aggregate many submitted
+ * hashes into a Merkle tree and periodically commit the aggregate root
+ * into a public, tamper-evident ledger maintained entirely outside this
+ * project's control. This is a real, widely-used, free timestamping
+ * service - not a simulation, and no financial transaction, wallet, token,
+ * or monetary value of any kind is involved on this project's side; it
+ * uses that public ledger purely as a clock, the same way a notary uses a
+ * dated newspaper to prove a document existed by a certain day. Anchoring
+ * is asynchronous by nature (typically hours), so a freshly submitted
+ * anchor starts in a pending state and must be upgraded later via
+ * checkTimestampAnchor() once the public ledger has confirmed it.
+ *
+ * @param data - the string to anchor (e.g. a finalization manifestHash).
+ *   This function computes a real SHA-256 of it internally - the OTS proof
+ *   is explicitly tagged OpSHA256, so it must actually contain a SHA-256
+ *   digest, not e.g. this codebase's usual SHA3-256 passed through
+ *   unchanged (mislabeling the algorithm inside the proof would make the
+ *   anchor unverifiable by any independent, spec-following OTS client).
+ * @returns base64-encoded .ots proof file - store this; it's required to
+ *   later check/upgrade confirmation status and to independently verify
+ *   the anchor without trusting this server.
+ */
+export async function submitTimestampAnchor(data: string): Promise<{ otsProofBase64: string; submittedAt: number; anchoredSha256: string }> {
+  const hashBytes = createHash('sha256').update(data).digest();
+  const detached = OpenTimestamps.DetachedTimestampFile.fromHash(new OpenTimestamps.Ops.OpSHA256(), hashBytes);
+  await OpenTimestamps.stamp(detached);
+  const proofBytes: Uint8Array = detached.serializeToBytes();
+  return {
+    otsProofBase64: Buffer.from(proofBytes).toString('base64'),
+    submittedAt: Date.now(),
+    anchoredSha256: hashBytes.toString('hex'),
+  };
+}
+
+/**
+ * Check/upgrade a previously-submitted anchor's confirmation status.
+ * Attempts to fetch a completed attestation from the calendar servers
+ * (this succeeds once the aggregate root has actually been committed into
+ * the public ledger); returns whether it's confirmed yet, honestly - most
+ * calls in the hours after submission will correctly report unconfirmed,
+ * which is expected, not an error.
+ */
+export async function checkTimestampAnchor(otsProofBase64: string): Promise<{
+  confirmed: boolean;
+  detail: string;
+  upgradedProofBase64?: string;
+}> {
+  const proofBytes = Buffer.from(otsProofBase64, 'base64');
+  const detached = OpenTimestamps.DetachedTimestampFile.deserialize(proofBytes);
+
+  let upgraded = false;
+  try {
+    upgraded = await OpenTimestamps.upgrade(detached);
+  } catch {
+    upgraded = false;
+  }
+
+  const info: string = OpenTimestamps.info(detached);
+  const confirmed = /BlockHeaderAttestation/i.test(info) || /attests/i.test(info);
+
+  return {
+    confirmed,
+    detail: info,
+    ...(upgraded ? { upgradedProofBase64: Buffer.from(detached.serializeToBytes()).toString('base64') } : {}),
   };
 }
 
@@ -855,12 +1118,15 @@ export default {
   generateVoteValidityProof,
   signData,
   verifySignature,
+  derivePublicKey,
   createReceiptHash,
   MerkleTree,
   VoteDAG,
   constantTimeEqual,
   hashIPAddress,
   generateBlockchainAnchor,
+  submitTimestampAnchor,
+  checkTimestampAnchor,
   generateChallenge,
 };
 

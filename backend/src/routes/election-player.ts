@@ -1,21 +1,15 @@
 /**
- * ELECTION PLAYER - Real-time Visualization & Playback
- * =====================================================
- * Series A Demo Feature: Live election results with geographic heatmaps
- * 
- * Features:
- * - Real-time vote streaming
- * - Playback at various speeds
- * - Geographic visualization by state/county
- * - Color-coded heatmaps by vote totals
- * - Cryptographic proof validation in real-time
+ * Election playback/visualization: replays recorded votes as a timeline,
+ * geographic heatmaps by state/county, and per-vote Merkle-proof
+ * verification. See docs/protocol.md for the underlying protocol this
+ * visualizes.
  */
 
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../db';
+import { MerkleTree } from '../crypto/engine';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Color scheme for parties
 const PARTY_COLORS: { [key: string]: string } = {
@@ -185,7 +179,13 @@ router.get('/:electionId/stats', async (req: Request, res: Response) => {
 
 /**
  * POST /api/election-player/:electionId/verify-vote
- * Verify a vote's cryptographic proof in real-time during playback
+ * Verify a vote's inclusion by recomputing a real Merkle proof from the
+ * current vote set, rather than comparing two stored root columns.
+ *
+ * If the election has been finalized (docs/protocol.md, "Stage:
+ * Finalization"), this checks against the signed, immutable
+ * finalBallotRoot instead of the live column, which is the actual point
+ * of finalizing.
  */
 router.post('/:electionId/verify-vote', async (req: Request, res: Response) => {
   try {
@@ -193,7 +193,7 @@ router.post('/:electionId/verify-vote', async (req: Request, res: Response) => {
     const { receiptHash } = req.body;
 
     const vote = await prisma.vote.findFirst({
-      where: { 
+      where: {
         electionId,
         receiptHash,
       },
@@ -204,25 +204,38 @@ router.post('/:electionId/verify-vote', async (req: Request, res: Response) => {
     });
 
     if (!vote) {
-      return res.status(404).json({ 
-        success: false, 
+      return res.status(404).json({
+        success: false,
         verified: false,
-        error: 'Vote not found' 
+        error: 'Vote not found',
       });
     }
 
-    // Compare merkle root in vote with election's current merkle root
-    const isValid = vote.merkleRoot === vote.election.merkleRoot;
+    const finalization = await prisma.electionFinalization.findUnique({ where: { electionId } });
+
+    const allVotes = await prisma.vote.findMany({
+      where: { electionId },
+      orderBy: { ledgerTimestamp: 'asc' },
+      select: { id: true, encryptedVote: true },
+    });
+    const voteIndex = allVotes.findIndex(v => v.id === vote.id);
+    const tree = new MerkleTree(allVotes.map(v => v.encryptedVote));
+    const recomputedProof = tree.getProof(voteIndex);
+    const proofValid = MerkleTree.verifyProof(recomputedProof);
+
+    const expectedRoot = finalization ? finalization.finalBallotRoot : vote.election.merkleRoot;
+    const rootMatches = expectedRoot === recomputedProof.root;
 
     res.json({
       success: true,
-      verified: isValid,
+      verified: proofValid && rootMatches,
       vote: {
         receiptHash: vote.receiptHash,
         candidateName: vote.candidate.name,
         timestamp: vote.ledgerTimestamp,
-        merkleProof: vote.merkleProof,
+        merkleProof: recomputedProof,
       },
+      checkedAgainst: finalization ? 'signed final root' : 'live election.merkleRoot (not yet finalized)',
     });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });

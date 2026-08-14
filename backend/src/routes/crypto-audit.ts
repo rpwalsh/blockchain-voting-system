@@ -1,100 +1,86 @@
 /**
  * CRYPTOGRAPHIC AUDIT API
  * =======================
- * Exposes the "under the hood" tooling that makes this system trustless
- * 
- * This is what differentiates us from Smartmatic/Diebold:
- * - Public verifiability
- * - Cryptographic proofs anyone can check
- * - No black boxes
+ * Exposes the cryptographic primitives this system actually uses, and lets
+ * a caller run real checks against a real election's data rather than
+ * asking them to trust a description of what "should" happen.
+ *
+ * See docs/cryptography.md for the full, honest per-primitive breakdown.
+ * This endpoint makes no compliance or certification claims (no FIPS,
+ * Common Criteria, SOC 2, ISO 27001, etc). Using NIST-recommended
+ * algorithms (true, see below) is not the same claim as holding a
+ * certification.
  */
 
 import { Router, Request, Response } from 'express';
 import crypto, { MerkleTree } from '../crypto/engine';
+import { domainHash, DOMAIN } from '../crypto/canonical';
 import { prisma } from '../index';
 
 const router = Router();
 
 /**
  * GET /api/crypto-audit/capabilities
- * Returns all cryptographic capabilities of the system
+ * Returns the cryptographic primitives actually in use, and their real
+ * implementation status (real vs. fallback) - see docs/cryptography.md.
  */
 router.get('/capabilities', (req: Request, res: Response) => {
   res.json({
     success: true,
-    system: 'Trustless Voting Cryptographic Engine v2.0',
-    comparison: {
-      smartmatic: {
-        verification: 'Proprietary - Trust required',
-        auditTrail: 'Closed source',
-        voterReceipts: 'None',
-        publicVerifiability: 'None',
-      },
-      trustlessVoting: {
-        verification: 'Mathematically provable - Zero trust required',
-        auditTrail: 'Public Merkle tree',
-        voterReceipts: 'Cryptographic proof for every voter',
-        publicVerifiability: 'Anyone can verify any vote',
-      },
-    },
+    system: 'Election protocol cryptographic engine',
+    docs: 'See docs/protocol.md, docs/threat-model.md, docs/trust-model.md, docs/cryptography.md in this repository',
     capabilities: {
       encryption: {
         name: 'NaCl Box (Curve25519-XSalsa20-Poly1305)',
         keyExchange: 'X25519 (Curve25519)',
         cipher: 'XSalsa20',
         auth: 'Poly1305',
-        security: '256-bit security level',
-        postQuantum: 'CRYSTALS-Kyber upgrade path ready',
+        status: 'real',
       },
       signatures: {
         name: 'Ed25519',
         type: 'EdDSA (Edwards-curve Digital Signature Algorithm)',
         curve: 'Curve25519',
-        security: '128-bit security level',
-        features: ['Deterministic', 'Fast', 'Small signatures'],
+        status: 'real',
       },
       hashing: {
-        primary: 'SHA3-256 (Keccak)',
+        primary: 'SHA3-256 (Keccak), domain-separated (see docs/cryptography.md)',
         extended: 'SHA3-512',
         pbkdf2Iterations: 210000,
-        compliance: 'OWASP 2024 / NIST SP 800-132',
+        status: 'real',
       },
       thresholdCrypto: {
         name: 'Shamir Secret Sharing',
         defaultThreshold: '3-of-5',
         description: 'Election key split among 5 officials, need 3 to decrypt',
-        benefit: 'No single person can decrypt votes alone',
+        status: 'real implementation, project-written (not an externally audited library) - see docs/cryptography.md',
       },
       merkleTree: {
-        algorithm: 'SHA3-256',
+        algorithm: 'SHA3-256, domain-separated leaf/internal-node hashing',
         verification: 'O(log n) proof size',
-        benefit: 'Prove vote inclusion without downloading entire ledger',
+        status: 'real',
       },
       zeroKnowledge: {
-        current: 'Schnorr-based commitment scheme',
-        production: 'zk-SNARKs (Groth16/PLONK)',
-        curve: 'BN128 / BLS12-381',
-        benefit: 'Prove eligibility without revealing identity',
+        tokenValidity: {
+          protocol: 'Groth16 zk-SNARK',
+          curve: 'BN128',
+          status: 'real - compiled circuit, real trusted-setup artifacts (single-contributor local ceremony - see backend/circuits/README.md for what a production ceremony would require)',
+        },
+        voteValidity: {
+          status: 'not implemented - generateVoteValidityProof always returns the fiat-shamir-fallback protocol, which is a commitment, not a zero-knowledge proof of anything',
+        },
+        tallyCorrectness: {
+          status: 'not implemented',
+        },
       },
       blockchainAnchoring: {
-        supported: ['Ethereum', 'Hyperledger Fabric'],
-        purpose: 'Immutable timestamp proof',
-        frequency: 'Every 100 votes',
+        status: 'simulated - generateBlockchainAnchor() computes a local commitment digest and does not submit anything to Ethereum, Hyperledger, or any other chain. See docs/cryptography.md, "On the blockchain anchor".',
       },
       dag: {
-        name: 'Directed Acyclic Graph',
-        purpose: 'Vote dependency tracking',
-        benefit: 'Detect and prevent double-voting attempts',
+        name: 'Directed Acyclic Graph (VoteDAG)',
+        status: 'implemented as a data structure; not currently wired into any live route',
       },
     },
-    compliance: [
-      'NIST SP 800-57 (Key Management)',
-      'NIST SP 800-90A (Random Number Generation)',
-      'FIPS 140-2 Level 2+ (Cryptographic Modules)',
-      'Common Criteria EAL4+ (Security Evaluation)',
-      'SOC 2 Type II (Security Controls)',
-      'ISO 27001 (Information Security)',
-    ],
   });
 });
 
@@ -229,13 +215,8 @@ router.get('/live-demo', async (req: Request, res: Response) => {
   res.json({
     success: true,
     totalDuration: `${Date.now() - startTime}ms`,
-    message: 'All operations completed. This is what happens for every single vote.',
+    message: 'Demonstration of the cryptographic primitives this system uses. See docs/protocol.md for which of these are wired into a live, enforced ballot-submission endpoint today versus demonstrated here in isolation.',
     demonstrations: demos,
-    vsCompetition: {
-      smartmatic: 'Black box - you have no idea what happens',
-      diebold: 'Proprietary - trust them blindly',
-      trustlessVoting: 'Every operation is verifiable and open',
-    },
   });
 });
 
@@ -267,56 +248,101 @@ router.get('/election/:id/integrity', async (req: Request, res: Response) => {
 
     const checks: any[] = [];
 
-    // 1. Vote Count Integrity
+    // 1. Vote Count Integrity - status is derived from the actual match,
+    // never hardcoded (see docs/threat-model.md, "Report false integrity
+    // check status to auditors" row for why this matters).
+    const voteCastEntries = ledgerEntries.filter((e: any) => e.entryType === 'VOTE_CAST').length;
+    const voteCountMatch = votes.length === voteCastEntries;
     checks.push({
       check: 'Vote Count Integrity',
-      status: 'PASS',
+      status: voteCountMatch ? 'PASS' : 'FAIL',
       details: {
         recordedVotes: votes.length,
-        ledgerEntries: ledgerEntries.length,
-        match: votes.length === ledgerEntries.filter((e: any) => e.entryType === 'VOTE_CAST').length,
+        voteCastLedgerEntries: voteCastEntries,
+        match: voteCountMatch,
       },
     });
 
-    // 2. Merkle Root Verification
+    // 2. Merkle Root Verification - actually recomputes the tree from the
+    // current votes and compares against the election's stored root,
+    // rather than just reporting "we built a tree successfully."
     if (votes.length > 0) {
       const voteHashes = votes.map((v: any) => v.encryptedVote);
       const tree = new MerkleTree(voteHashes);
+      const recomputedRoot = tree.getRoot();
+      const rootMatch = !!election.merkleRoot && election.merkleRoot === recomputedRoot;
+      checks.push({
+        check: 'Merkle Tree Integrity',
+        status: rootMatch ? 'PASS' : 'FAIL',
+        details: {
+          recomputedRoot: recomputedRoot.substring(0, 32) + '...',
+          storedRoot: election.merkleRoot ? election.merkleRoot.substring(0, 32) + '...' : null,
+          match: rootMatch,
+          totalLeaves: voteHashes.length,
+          algorithm: 'SHA3-256, domain-separated',
+        },
+      });
+    } else {
       checks.push({
         check: 'Merkle Tree Integrity',
         status: 'PASS',
-        details: {
-          merkleRoot: tree.getRoot().substring(0, 32) + '...',
-          totalLeaves: voteHashes.length,
-          treeDepth: Math.ceil(Math.log2(voteHashes.length)),
-          algorithm: 'SHA3-256',
-        },
+        details: { note: 'No votes recorded yet - nothing to check', totalLeaves: 0 },
       });
     }
 
-    // 3. Signature Chain Verification
+    // 3. Ledger Chain Integrity - actually walks previousEntryHash and
+    // recomputes each entry's dataHash and signature, rather than
+    // asserting chainValid = true without checking anything.
     let chainValid = true;
-    // Note: Full chain validation requires the previousEntryHash field - simplified for demo
+    const chainIssues: string[] = [];
+    for (let i = 0; i < ledgerEntries.length; i++) {
+      const entry: any = ledgerEntries[i];
+      const prev: any = i > 0 ? ledgerEntries[i - 1] : null;
+
+      const expectedDataHash = domainHash(DOMAIN.ELECTION_LEDGER, {
+        electionId: entry.electionId,
+        entryType: entry.entryType,
+        data: entry.data,
+        previousEntryHash: prev ? prev.dataHash : null,
+      });
+      if (expectedDataHash !== entry.dataHash) {
+        chainValid = false;
+        chainIssues.push(`entry ${i}: dataHash does not match recomputed hash`);
+      }
+      if ((entry.previousEntryHash || null) !== (prev ? prev.dataHash : null)) {
+        chainValid = false;
+        chainIssues.push(`entry ${i}: previousEntryHash does not match prior entry's dataHash`);
+      }
+      if (entry.signature && entry.signerPublicKey) {
+        const sigValid = crypto.verifySignature(entry.dataHash, entry.signature, entry.signerPublicKey);
+        if (!sigValid) {
+          chainValid = false;
+          chainIssues.push(`entry ${i}: signature does not verify against signerPublicKey`);
+        }
+      }
+    }
     checks.push({
       check: 'Ledger Chain Integrity',
-      status: 'PASS',
+      status: chainValid ? 'PASS' : 'FAIL',
       details: {
         entriesChecked: ledgerEntries.length,
         chainUnbroken: chainValid,
-        type: 'Blockchain-style hash linking',
+        issues: chainIssues,
+        type: 'Hash-chained, Ed25519-signed entries (see docs/protocol.md, "Stage: Audit")',
       },
     });
 
-    // 4. Encryption Verification
+    // 4. Encryption Verification - fails if any recorded vote is not in
+    // the expected encrypted-envelope shape, rather than always passing.
     const encryptedVotes = votes.filter((v: any) => v.encryptedVote && v.encryptedVote.includes('ciphertext'));
+    const encryptionOk = votes.length === 0 || encryptedVotes.length === votes.length;
     checks.push({
       check: 'Vote Encryption Status',
-      status: 'PASS',
+      status: encryptionOk ? 'PASS' : 'FAIL',
       details: {
         totalVotes: votes.length,
         properlyEncrypted: encryptedVotes.length,
         algorithm: 'Curve25519-XSalsa20-Poly1305',
-        decryptable: 'Only with threshold key reconstruction',
       },
     });
 
@@ -348,10 +374,6 @@ router.get('/election/:id/integrity', async (req: Request, res: Response) => {
         overallStatus: checks.every(c => c.status === 'PASS') ? 'VERIFIED' : 'ISSUES_FOUND',
         checksPerformed: checks.length,
         checks,
-      },
-      comparison: {
-        smartmatic: 'No public integrity verification available',
-        trustlessVoting: 'Anyone can run these same checks independently',
       },
     });
   } catch (error: any) {
@@ -425,10 +447,6 @@ router.post('/verify-receipt', async (req: Request, res: Response) => {
         forVoter: 'Your vote was cryptographically recorded in the election',
         privacy: 'This receipt does NOT reveal who you voted for',
         verification: 'Anyone with this receipt can verify independently',
-      },
-      vsCompetition: {
-        smartmatic: 'No voter receipts - just trust them',
-        trustlessVoting: 'Mathematical proof your vote was counted',
       },
     });
   } catch (error: any) {
@@ -542,17 +560,13 @@ router.get('/algorithms', (req: Request, res: Response) => {
       {
         name: 'Groth16 (zk-SNARKs)',
         type: 'Zero-Knowledge Proof',
-        usage: 'Proving voter eligibility privately',
+        usage: 'Proving knowledge of a valid voting token without revealing it (token_validity circuit)',
         security: '128-bit',
-        status: 'Production-ready framework',
-        whyWeUseIt: 'Prove you CAN vote without revealing WHO you are',
+        status: 'real for the token_validity circuit specifically - compiled, real trusted-setup artifacts (single-contributor ceremony, see backend/circuits/README.md). Not yet implemented for ballot validity or tally correctness - see docs/cryptography.md',
+        whyWeUseIt: 'Prove you hold a valid token without revealing which one',
       },
     ],
-    compliance: {
-      nist: 'All algorithms are NIST-approved or exceed NIST standards',
-      fips: 'FIPS 140-2 Level 2+ compliant',
-      postQuantum: 'CRYSTALS-Kyber migration path for quantum resistance',
-    },
+    note: 'These are the algorithms in use. Using NIST-approved algorithms is not the same claim as holding a certification - this system has not gone through FIPS 140, Common Criteria, SOC 2, or ISO 27001 validation. See docs/cryptography.md.',
   });
 });
 
