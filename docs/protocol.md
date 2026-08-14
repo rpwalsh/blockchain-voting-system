@@ -138,16 +138,21 @@ change requires a new `ElectionID`.
 
 **Cryptographic commitments:** `ConfigurationHash = H("ELECTION-CONFIG", canon(electionManifest))`.
 
-**Signatures:** `Sig(officerKey, ConfigurationHash)`, and once Milestone 5's
-multi-party administration lands, an M-of-N threshold signature rather than a single
+**Signatures:** as of Milestone 5, the `CERTIFY` action
+(`backend/src/routes/election-approvals.ts`) requires `>=` threshold distinct admins
+to each submit a real Ed25519 signature over the proposal hash before the
+`DRAFT` → `REGISTRATION` transition executes — a real M-of-N gate, not a single
 officer key.
 
 **Failure conditions:** attempting to certify with zero candidates (for
 candidate-based elections), an empty eligibility set, or a start date in the past.
 
-**Implementation status:** not implemented — there is currently no explicit
-certification step or immutability enforcement between `DRAFT` and later statuses.
-This is Milestone 1 scope.
+**Implementation status:** the multi-party approval gate on the status transition is
+real (Milestone 5). Field-level immutability enforcement after certification
+(rejecting a direct write to candidates/dates/keys once past `DRAFT`) is not yet
+implemented — a determined direct-DB-write attacker could still mutate a
+"certified" election's configuration outside the approval flow; this is a known gap,
+not silently assumed solved.
 
 ---
 
@@ -171,25 +176,38 @@ stage.
 **Failure conditions:** voter not in the electorate snapshot; voter already
 registered (`@@unique([electionId, identityHash])` enforces this at the DB level).
 
-**Implementation status:** the primitives are real and exercised in tests
-(`backend/src/__tests__/crypto/engine-zk-paths.test.ts`), but there is no live HTTP
-endpoint that performs voter enrollment against a real electorate snapshot outside of
-seed scripts. Building that endpoint is Milestone 1 scope; binding enrollment to
-*anonymous* credentials rather than a directly-issued token is Milestone 2 scope (see
-"Credential issuance is probably the biggest missing protocol" in the design
-backlog).
+**Implementation status:** real as of Milestone 1 (`POST
+/api/elections/:electionId/voters/register`, `backend/src/routes/ballot.ts`), checked
+against a real electorate snapshot. This issued token now only authenticates the
+*next* stage (eligibility credential enrollment) — it is not used to vote directly
+as of Milestone 2; see "Credential issuance" below.
 
 ---
 
 ## Stage: Credential issuance
 
-Specified for Milestone 2. Today, "credential" and "voting token" are the same
-bearer secret (`crypto.generateVotingToken()`), which the election server itself
-issues and can therefore correlate with the registration record it came from — the
-system does not yet have the identity/eligibility/credential/ballot separation the
-design backlog calls for. Milestone 2 replaces this with an anonymous credential
-scheme (eligibility proof issued by a registration authority, consumed without
-correlation by the voting protocol).
+**Inputs:** a registered voter (identified via the registration flow below) and a
+secret they generate client-side.
+
+**Outputs:** an `EligibilityCommitment` leaf — `commitment = Poseidon(secret, salt)`,
+`salt` deterministically derived from `secret` — added to the election's eligibility
+Merkle tree (20 levels, `circuits/eligibility.circom`). The server never sees `secret`,
+only `commitment`.
+
+**Cryptographic commitments:** `election.eligibilityRoot` is republished after each
+enrollment/revocation.
+
+**Failure conditions:** caller's token hash does not match a registered voter;
+election not in `DRAFT`/`REGISTRATION` (the tree must be stable once voting opens);
+commitment already enrolled.
+
+**Implementation status:** real as of Milestone 2 (`backend/src/routes/eligibility.ts`,
+`backend/circuits/eligibility.circom`). Enrollment is still identified (the caller
+authenticates via their registration token hash) — the anonymity property is that
+*voting*, the next stage, never correlates a ballot back to which enrolled commitment
+produced it, not that enrollment itself is anonymous. That's the real
+identity/eligibility/credential/ballot separation this stage exists for: an identified
+enrollment step feeding an anonymous voting step.
 
 ---
 
@@ -235,36 +253,38 @@ key were somehow shared or reused.
 
 ## Stage: Ballot submission
 
-**Inputs:** the encrypted ballot, the voter's credential/proof of eligibility, a
-freshness challenge from the server.
+**Inputs:** the encrypted ballot, a Groth16 proof of eligibility (Merkle membership
+in `election.eligibilityRoot`, `circuits/eligibility.circom`).
 
-**Outputs:** a `Vote` record: encrypted vote, `voteProof`, `receiptHash`,
-`ledgerEntryHash`, Merkle root at time of inclusion, Merkle proof.
+**Outputs:** a `Vote` record: encrypted vote, homomorphic tally ciphertexts
+(one EC ElGamal encryption per candidate, one-hot — see "Stage: Tally"), `voteProof`,
+`receiptHash`, `ledgerEntryHash`, Merkle root at time of inclusion, Merkle proof.
 
-**State transition:** credential moves from `unspent` to `spent` for this election
-(enforced today by `Voter.hasVoted` / `votingTokenHash` uniqueness; enforced in the
-target design by nullifier uniqueness — see Milestone 2).
+**State transition:** the proof's nullifier (`Poseidon(secret, electionId)`, a public
+circuit output) moves from `unspent` to `spent` — enforced by a unique constraint on
+`(electionId, nullifier)`, checked *without the server ever looking up which enrolled
+credential this is*. This is what makes double-vote prevention anonymity-preserving:
+the old design looked up "voter by token" before verifying anything, so the server
+always knew who was voting regardless of any proof.
 
 **Cryptographic commitments:** the vote is appended to the append-only ledger
 (`LedgerEntry`, `entryType: 'VOTE_CAST'`) and to the running Merkle tree over all
-votes cast so far.
+ballot ciphertexts cast so far.
 
-**Signatures:** the ledger entry is signed (`signerPublicKey`/`signature` fields
-exist on `LedgerEntry`) by the entity that accepted the ballot.
+**Signatures:** the ledger entry is signed (`signerPublicKey`/`signature` fields on
+`LedgerEntry`) by the election's signing key.
 
-**Failure conditions:** credential already spent (double-vote); malformed
-ciphertext; proof does not verify; election not in `OPEN` status; ballot definition
-hash mismatch.
+**Failure conditions:** nullifier already spent (double-vote, `P2002` on the unique
+constraint); eligibility proof does not verify or is checked against a stale root;
+election not in `VOTING` status; `candidateId` not a real candidate for this election.
 
-**Implementation status: this stage does not currently exist as a live endpoint.**
-This is the single most important gap identified in this repository's Milestone 1
-audit: every `Vote` row in the database today was written directly by a seed script
-(`backend/src/scripts/seed-demo.ts`, `seed-production.ts`), not accepted through an
-HTTP API that enforces credential-spend checks, proof verification, or ledger
-signing. The cryptographic *primitives* needed to build this endpoint correctly are
-real and tested in isolation; the endpoint that composes them into an enforced
-protocol is Milestone 1 work. See `docs/threat-model.md`, "malicious voter" and
-"compromised server" categories, for why this matters.
+**Implementation status:** real and enforced as of Milestones 1-2
+(`backend/src/routes/ballot.ts`). Honest remaining gap: `candidateId` is still stored
+in the clear on the `Vote` row alongside the homomorphic ciphertext — the *published,
+certified* tally comes entirely from the ciphertext path (see "Stage: Tally"), but
+full ballot secrecy from a database-level adversary would require removing the
+plaintext field too, tracked as a follow-up hardening item rather than silently
+assumed done.
 
 ---
 
@@ -279,12 +299,14 @@ been compiled; see `docs/cryptography.md`).
 
 ## Stage: Duplicate prevention
 
-Today: `Voter.votingTokenHash` is `@unique` and `Voter.hasVoted` is checked
-server-side. This prevents the *same registered voter row* from voting twice, but
-because the voting token is a bearer credential the server itself issued and can
-trace back to the voter record, it does not yet provide the anonymity-preserving
-double-vote prevention the design targets (nullifier-based, unlinkable to identity).
-That upgrade is Milestone 2.
+Nullifier-based as of Milestone 2: each eligibility proof outputs
+`nullifier = Poseidon(secret, electionId)`, deterministic per credential per
+election (so a double-vote attempt reuses the same nullifier and collides) and
+unlinkable across elections (different `electionId` → unrelated nullifier). The
+`Nullifier` table's `(electionId, nullifier)` unique constraint is checked inside the
+same transaction that records the vote, so a race between two concurrent double-vote
+attempts fails atomically rather than both succeeding. This is real, anonymity-
+preserving double-vote prevention, not identity-based deduplication.
 
 ## Stage: Ballot inclusion
 
@@ -310,11 +332,12 @@ are real (`backend/src/crypto/engine.ts`, domain tags in
 
 **State transition:** `OPEN` → `CLOSED`.
 
-**Implementation status:** not implemented as an enforced transition — nothing
-currently prevents a `Vote` from being written against an election whose `endDate`
-has passed, because (per above) there is no ballot-submission endpoint enforcing
-status at all yet. Building the ballot endpoint (Milestone 1) includes this check
-from day one.
+**Implementation status:** the ballot endpoint enforces `election.status === 'VOTING'`
+on every vote (Milestone 1) and finalization requires the same status to transition to
+`COMPLETED` (Milestone 1/5's `FINALIZE` approval action) - so votes stop being
+accepted the moment finalization runs. There is no separate enforced `endDate` cutoff
+independent of an explicit close/finalize action: an election whose `endDate` has
+passed but hasn't been finalized will still accept votes. Real gap, not yet closed.
 
 ## Stage: Finalization
 
@@ -350,39 +373,59 @@ current `generateBlockchainAnchor()` is not a real anchor) — that is Milestone
 
 ## Stage: Tally
 
-**Target:** an architecture where `publishedResult = correctFunction(all committed
-ballots)` is independently verifiable — homomorphic tally, mixnet, or
-threshold-decryption-of-aggregate (design backlog item 11). **Not implemented.**
-`TallyResult.proof` exists as a schema field described as "ZK proof tally is
-correct" but nothing in the codebase populates it with a real proof; this comment is
-corrected as part of Milestone 1's "remove security theater" pass, and the actual
-cryptographic tally is Milestone 3 scope.
+**Target:** `publishedResult = correctFunction(all committed ballots)`, independently
+verifiable without trusting the server's arithmetic. **Real as of Milestone 3**
+(`backend/src/crypto/tally.ts`, `backend/src/routes/tally.ts`): exponential
+(lifted) EC ElGamal over secp256k1. Each ballot carries one ciphertext per candidate,
+one-hot at the voter's choice; ciphertexts are summed homomorphically (EC point
+addition) across all ballots; the sum is threshold-decrypted by combining
+`tallyThreshold`-many trustees' partial decryptions via Lagrange interpolation in the
+exponent — no party, including the server, ever reconstructs the tally private key.
+Each partial decryption carries a Chaum-Pedersen NIZK proof that it was computed
+honestly from the trustee's committed share, checkable by anyone.
 
-Today, tallying (where it happens at all, e.g. in `election-player.ts`'s stats
-endpoint) is a plaintext count over `Vote` rows grouped by `candidateId` — which
-requires the reader to trust the database, not a cryptographic proof.
+`GET /:electionId/tally/verify` independently re-derives the result from scratch:
+recomputes the ciphertext sum from live ballots (not trusting the stored sum),
+re-checks every partial-decryption proof against the trustees' real published
+commitments (`election.tallyKeyShares`, not commitments embedded in the same
+tamper-checked bundle), and re-solves the bounded discrete log.
+
+**Honest remaining gap:** trustee shares are generated and stored server-side at
+election creation (same centralized-custody gap as the signing key — see
+`docs/threat-model.md`, "Colluding trustees"). What's real: no plaintext tally key is
+ever persisted, and the published result is independently checkable regardless of who
+custodies the shares today.
 
 ## Stage: Result certification
 
-Specified to require the same threshold-signature mechanism as finalization, applied
-to the tally output. Not implemented; depends on Milestone 3 (real tally) existing
-first.
+Uses the same multi-party threshold-signature mechanism as other critical actions
+(Milestone 5, `backend/src/routes/election-approvals.ts`): a `TALLY` proposal
+requires `>=` threshold distinct admins to each submit a real Ed25519 signature over
+the proposal hash before `computeTally()` runs. One admin cannot certify a result
+alone.
 
 ## Stage: Recount
 
-**Target:** `election-verifier recount <election-package>` independently
-regenerates the tally from the same finalized artifacts without touching the
-original election state; a mismatch between original and recount result is a
-protocol failure, not something the server explains away. Not implemented —
-Milestone 5, and depends on Milestone 4's independent verifier existing.
+**Real as of Milestone 5** (`POST /:electionId/recount`,
+`backend/src/routes/operations.ts`): independently regenerates everything from
+scratch rather than touching cached totals — walks the full ledger chain and
+verifies every entry's hash/signature, rebuilds the ballot Merkle tree from live
+ciphertexts, and (if a tally exists) re-derives each candidate's count via a fresh
+threshold decryption. Flags any mismatch rather than assuming stored values are
+correct. The independent verifier CLI (Milestone 4, `verifier/`) provides the same
+guarantee from outside the server entirely, given an audit export bundle.
 
 ## Stage: Audit
 
-The append-only `LedgerEntry` log is real as a data model and is populated for vote
-casts via seed scripts today. It is not yet independently reconstructible/verifiable
-end-to-end (the "Ledger Chain Integrity" check in `crypto-audit.ts` currently
-hardcodes `chainValid = true` without checking `previousEntryHash` at all — fixed
-under Milestone 1; see `docs/threat-model.md`).
+The append-only `LedgerEntry` log is real, hash-chained (`@@unique([electionId,
+previousEntryHash])` blocks concurrent writers from forking the chain), Ed25519-signed
+per entry, and independently reconstructible: `crypto-audit.ts`'s integrity checks and
+`operations.ts`'s recount both actually walk `previousEntryHash` and recompute
+`dataHash`/signatures rather than asserting validity. `GET /:electionId/observer/status`
+exposes real-time aggregate integrity signals (ledger depth, current Merkle root, vote
+count, finalization/anchor status) publicly, with no voter- or ballot-content data.
+`GET /:electionId/audit-export` packages a full bundle in the exact shape the
+Milestone 4 verifier CLI's `--bundle` mode consumes.
 
 ## Stage: Receipt verification
 
@@ -404,9 +447,8 @@ Proves *inclusion*, never *choice*. Not an NFT, not a bearer-transferable proof 
 how someone voted — see `docs/threat-model.md`, "coercer" category, for why that
 distinction is load-bearing rather than a style preference.
 
-**Implementation status:** two different, inconsistent verification code paths exist
-today (`governance.ts POST /verifier/receipt` reconstructs a real Merkle proof;
-`election-player.ts POST /:electionId/verify-vote` only compares
-`vote.merkleRoot === vote.election.merkleRoot` without checking the proof path at
-all). Milestone 1 unifies these into one real verifier and adds the signed-manifest
-root as the thing actually checked against, per "Finalization" above.
+**Implementation status:** unified as of Milestone 1 — `election-player.ts POST
+/:electionId/verify-vote` reconstructs a real Merkle proof and checks it against
+`ElectionFinalization.finalBallotRoot` once finalized (else the live
+`election.merkleRoot`), per "Finalization" above. The Milestone 4 verifier CLI
+(`verifier/`) provides the same check from entirely outside the server.
