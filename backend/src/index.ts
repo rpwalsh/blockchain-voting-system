@@ -16,6 +16,8 @@ import ballotRoutes from './routes/ballot';
 import finalizationRoutes from './routes/finalization';
 import eligibilityRoutes from './routes/eligibility';
 import tallyRoutes from './routes/tally';
+import electionApprovalsRoutes from './routes/election-approvals';
+import operationsRoutes from './routes/operations';
 import { errorHandler } from './middleware/errorHandler';
 import { logger } from './utils/logger';
 
@@ -68,6 +70,8 @@ app.use('/api/elections', ballotRoutes);
 app.use('/api/elections', finalizationRoutes);
 app.use('/api/elections', eligibilityRoutes);
 app.use('/api/elections', tallyRoutes);
+app.use('/api/elections', electionApprovalsRoutes);
+app.use('/api/elections', operationsRoutes);
 
 // Election API routes (inline for now to avoid circular import)
 app.get('/api/election', async (req: Request, res: Response) => {
