@@ -135,6 +135,11 @@ export const finalizationService = {
     const response = await api.get(`/elections/${electionId}/finalization/anchor`);
     return response.data;
   },
+
+  async submitAnchor(electionId: string) {
+    const response = await api.post(`/elections/${electionId}/finalization/anchor`);
+    return response.data;
+  },
 };
 
 // Real, currently-mounted endpoints (backend/src/routes/election-player.ts).
@@ -146,6 +151,54 @@ export const electionPlayerService = {
 
   async getStats(electionId: string) {
     const response = await api.get(`/election-player/${electionId}/stats`);
+    return response.data;
+  },
+
+  // Recomputes a real Merkle proof for a ballot from the live vote set and
+  // checks it against the signed finalization root when one exists (falls
+  // back to the live election.merkleRoot otherwise) - see the route's own
+  // comment in backend/src/routes/election-player.ts for why this is the
+  // stronger of the two receipt-verification endpoints in this codebase.
+  async verifyVote(electionId: string, receiptHash: string) {
+    const response = await api.post(`/election-player/${electionId}/verify-vote`, { receiptHash });
+    return response.data;
+  },
+};
+
+// Real, currently-mounted endpoints (backend/src/routes/tally.ts).
+export const tallyService = {
+  async computeTally(electionId: string) {
+    const response = await api.post(`/elections/${electionId}/tally/compute`);
+    return response.data;
+  },
+
+  // Independently re-verifies a certified tally from scratch: recomputes
+  // the homomorphic ciphertext sum, re-checks every trustee's
+  // Chaum-Pedersen partial-decryption proof, and re-combines them - does
+  // not trust the stored vote count at all.
+  async verifyTally(electionId: string) {
+    const response = await api.get(`/elections/${electionId}/tally/verify`);
+    return response.data;
+  },
+};
+
+// Real, currently-mounted endpoints (backend/src/routes/operations.ts).
+// No auth required - recount and observer/status are public integrity
+// signals by design; audit-export packages the bundle the independent
+// verifier CLI (verifier/) consumes.
+export const operationsService = {
+  async recount(electionId: string) {
+    const response = await api.post(`/elections/${electionId}/recount`);
+    return response.data;
+  },
+
+  async getObserverStatus(electionId: string) {
+    const response = await api.get(`/elections/${electionId}/observer/status`);
+    return response.data;
+  },
+
+  async getAuditExport(electionId: string) {
+    const response = await api.get(`/elections/${electionId}/audit-export`);
     return response.data;
   },
 };

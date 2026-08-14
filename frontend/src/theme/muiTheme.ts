@@ -1,22 +1,26 @@
 /**
- * MATERIAL UI THEME - TRUSTLESS VOTING
- * =====================================
- * Production-grade theming with modern color theory
- * 
+ * MATERIAL UI THEME - CRYPTOGRAPHIC ELECTION INFRASTRUCTURE
+ * ============================================================
+ * Production-grade theming with modern color theory.
+ *
  * COLOR THEORY FOUNDATIONS:
  * - 60-30-10 Rule: 60% neutral, 30% secondary, 10% accent
  * - WCAG 2.1 AA contrast ratios (4.5:1 normal text, 3:1 large text)
  * - Semantic color mapping for accessibility
  * - Perceptually uniform color spacing (LAB color space considerations)
- * - Harmonious palette using split-complementary scheme
- * 
+ *
  * PALETTE PHILOSOPHY:
- * Primary: Trust/Security (Purple-Blue gradient) - conveys authority & innovation
- * Secondary: Action/Energy (Violet-Purple) - calls to action
+ * Primary: Indigo/ink - institutional trust, not a candy-bright SaaS purple.
+ * Secondary/accent: Teal - reserved for "cryptographically verified" states,
+ *   so it reads as a deliberate signal rather than a decorative color.
  * Success: Verification/Proof (Emerald) - confirmed states
- * Error: Alert/Critical (Rose-Red) - warning states  
- * Warning: Caution (Amber) - attention needed
- * Info: Neutral information (Blue) - informational states
+ * Error: Alert/Critical (Rose-Red) - failed checks
+ * Warning: Caution (Amber) - attention needed, pending states
+ * Info: Neutral information (Sky) - informational states
+ *
+ * Status chips/badges use flat semantic color, not gradients - a PASS/FAIL
+ * grid needs to scan instantly, not shimmer. Gradients are reserved for
+ * primary CTAs and decorative marks (Fab, Avatar, hero surfaces).
  */
 
 import { createTheme, ThemeOptions, alpha, PaletteOptions } from '@mui/material/styles';
@@ -26,34 +30,34 @@ import { createTheme, ThemeOptions, alpha, PaletteOptions } from '@mui/material/
 // ============================================================================
 
 const colors = {
-  // Primary: Indigo-Violet gradient (trust, security, innovation)
+  // Primary: Indigo/ink (institutional trust, not a pastel SaaS purple)
   primary: {
     50: '#eef2ff',
     100: '#e0e7ff',
     200: '#c7d2fe',
     300: '#a5b4fc',
     400: '#818cf8',
-    500: '#667eea',  // Main
-    600: '#4f46e5',
+    500: '#6366f1',
+    600: '#4f46e5',  // Main
     700: '#4338ca',
     800: '#3730a3',
     900: '#312e81',
     950: '#1e1b4b',
   },
-  
-  // Secondary: Purple-Violet (energy, creativity, action)
+
+  // Secondary/accent: Teal - reserved for "cryptographically verified" signals
   secondary: {
-    50: '#faf5ff',
-    100: '#f3e8ff',
-    200: '#e9d5ff',
-    300: '#d8b4fe',
-    400: '#c084fc',
-    500: '#a855f7',
-    600: '#9333ea',
-    700: '#764ba2',  // Main - adjusted for brand
-    800: '#6b21a8',
-    900: '#581c87',
-    950: '#3b0764',
+    50: '#f0fdfa',
+    100: '#ccfbf1',
+    200: '#99f6e4',
+    300: '#5eead4',
+    400: '#2dd4bf',
+    500: '#14b8a6',
+    600: '#0d9488',  // Main
+    700: '#0f766e',
+    800: '#115e59',
+    900: '#134e4a',
+    950: '#042f2e',
   },
   
   // Success: Emerald (verification, confirmed, proof)
@@ -137,9 +141,14 @@ const colors = {
 // TYPOGRAPHY SYSTEM - Modular scale (1.25 ratio)
 // ============================================================================
 
+// Monospace stack for hashes, keys, and other cryptographic material -
+// tabular figures so hex strings and receipt hashes align in a column.
+export const fontFamilyMono =
+  '"IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace';
+
 const typography: ThemeOptions['typography'] = {
   fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-  
+
   // Display headings - for hero sections
   h1: {
     fontWeight: 800,
@@ -304,47 +313,47 @@ const lightPalette: PaletteOptions = {
   mode: 'light',
   
   primary: {
-    main: colors.primary[500],
+    main: colors.primary[600],
     light: colors.primary[400],
-    dark: colors.primary[700],
+    dark: colors.primary[800],
     contrastText: colors.neutral[0],
   },
-  
+
   secondary: {
-    main: colors.secondary[700],
-    light: colors.secondary[500],
+    main: colors.secondary[600],
+    light: colors.secondary[400],
     dark: colors.secondary[800],
     contrastText: colors.neutral[0],
   },
-  
+
   success: {
     main: colors.success[500],
     light: colors.success[400],
     dark: colors.success[700],
     contrastText: colors.neutral[0],
   },
-  
+
   error: {
     main: colors.error[500],
     light: colors.error[400],
     dark: colors.error[700],
     contrastText: colors.neutral[0],
   },
-  
+
   warning: {
     main: colors.warning[500],
     light: colors.warning[400],
     dark: colors.warning[700],
     contrastText: colors.neutral[900],
   },
-  
+
   info: {
     main: colors.info[500],
     light: colors.info[400],
     dark: colors.info[700],
     contrastText: colors.neutral[0],
   },
-  
+
   background: {
     default: colors.neutral[50],
     paper: colors.neutral[0],
@@ -459,6 +468,7 @@ const getComponentOverrides = (mode: 'light' | 'dark'): ThemeOptions['components
         },
         body: {
           scrollBehavior: 'smooth',
+          backgroundColor: isDark ? colors.neutral[950] : colors.neutral[50],
         },
         '::selection': {
           backgroundColor: alpha(colors.primary[500], isDark ? 0.4 : 0.2),
@@ -492,18 +502,18 @@ const getComponentOverrides = (mode: 'light' | 'dark'): ThemeOptions['components
           },
         },
         containedPrimary: {
-          background: `linear-gradient(135deg, ${colors.primary[500]} 0%, ${colors.secondary[700]} 100%)`,
-          boxShadow: `0 4px 14px 0 ${alpha(colors.primary[500], 0.35)}`,
+          background: `linear-gradient(135deg, ${colors.primary[600]} 0%, ${colors.secondary[700]} 100%)`,
+          boxShadow: `0 4px 14px 0 ${alpha(colors.primary[600], 0.35)}`,
           '&:hover': {
-            background: `linear-gradient(135deg, ${colors.primary[600]} 0%, ${colors.secondary[800]} 100%)`,
-            boxShadow: `0 6px 20px 0 ${alpha(colors.primary[500], 0.45)}`,
+            background: `linear-gradient(135deg, ${colors.primary[700]} 0%, ${colors.secondary[800]} 100%)`,
+            boxShadow: `0 6px 20px 0 ${alpha(colors.primary[600], 0.45)}`,
           },
         },
         containedSecondary: {
-          background: `linear-gradient(135deg, ${colors.secondary[600]} 0%, ${colors.secondary[800]} 100%)`,
+          background: `linear-gradient(135deg, ${colors.secondary[500]} 0%, ${colors.secondary[700]} 100%)`,
           boxShadow: `0 4px 14px 0 ${alpha(colors.secondary[600], 0.35)}`,
           '&:hover': {
-            background: `linear-gradient(135deg, ${colors.secondary[700]} 0%, ${colors.secondary[900]} 100%)`,
+            background: `linear-gradient(135deg, ${colors.secondary[600]} 0%, ${colors.secondary[800]} 100%)`,
           },
         },
         containedSuccess: {
@@ -607,24 +617,27 @@ const getComponentOverrides = (mode: 'light' | 'dark'): ThemeOptions['components
           fontWeight: 600,
           borderRadius: 8,
         },
+        // Flat, not gradient: chips carry status (PASS/FAIL, VERIFIED/PENDING)
+        // and need to scan instantly in a grid, not shimmer.
         filled: {
           '&.MuiChip-colorSuccess': {
-            background: `linear-gradient(135deg, ${colors.success[isDark ? 600 : 500]} 0%, ${colors.success[isDark ? 700 : 600]} 100%)`,
+            backgroundColor: colors.success[isDark ? 600 : 500],
           },
           '&.MuiChip-colorError': {
-            background: `linear-gradient(135deg, ${colors.error[isDark ? 600 : 500]} 0%, ${colors.error[isDark ? 700 : 600]} 100%)`,
+            backgroundColor: colors.error[isDark ? 600 : 500],
           },
           '&.MuiChip-colorWarning': {
-            background: `linear-gradient(135deg, ${colors.warning[isDark ? 600 : 500]} 0%, ${colors.warning[isDark ? 700 : 600]} 100%)`,
+            backgroundColor: colors.warning[isDark ? 600 : 500],
+            color: colors.neutral[950],
           },
           '&.MuiChip-colorInfo': {
-            background: `linear-gradient(135deg, ${colors.info[isDark ? 600 : 500]} 0%, ${colors.info[isDark ? 700 : 600]} 100%)`,
+            backgroundColor: colors.info[isDark ? 600 : 500],
           },
           '&.MuiChip-colorPrimary': {
-            background: `linear-gradient(135deg, ${colors.primary[isDark ? 500 : 500]} 0%, ${colors.secondary[isDark ? 600 : 700]} 100%)`,
+            backgroundColor: colors.primary[isDark ? 500 : 600],
           },
           '&.MuiChip-colorSecondary': {
-            background: `linear-gradient(135deg, ${colors.secondary[isDark ? 500 : 600]} 0%, ${colors.secondary[isDark ? 700 : 800]} 100%)`,
+            backgroundColor: colors.secondary[isDark ? 500 : 600],
           },
         },
         outlined: {
@@ -1060,10 +1073,10 @@ const getComponentOverrides = (mode: 'light' | 'dark'): ThemeOptions['components
           fontSize: '0.75rem',
         },
         colorPrimary: {
-          background: `linear-gradient(135deg, ${colors.primary[500]} 0%, ${colors.secondary[600]} 100%)`,
+          backgroundColor: colors.primary[isDark ? 500 : 600],
         },
         colorError: {
-          background: `linear-gradient(135deg, ${colors.error[500]} 0%, ${colors.error[600]} 100%)`,
+          backgroundColor: colors.error[isDark ? 500 : 600],
         },
       },
     },
@@ -1264,18 +1277,20 @@ export const darkTheme = createTheme({
 
 export { colors };
 
-// Gradient utility
+// Gradient utility - primary/hero surfaces only, never status chips (see MuiChip above)
 export const gradients = {
-  primary: `linear-gradient(135deg, ${colors.primary[500]} 0%, ${colors.secondary[700]} 100%)`,
-  primaryHover: `linear-gradient(135deg, ${colors.primary[600]} 0%, ${colors.secondary[800]} 100%)`,
+  primary: `linear-gradient(135deg, ${colors.primary[600]} 0%, ${colors.secondary[700]} 100%)`,
+  primaryHover: `linear-gradient(135deg, ${colors.primary[700]} 0%, ${colors.secondary[800]} 100%)`,
   success: `linear-gradient(135deg, ${colors.success[500]} 0%, ${colors.success[700]} 100%)`,
   error: `linear-gradient(135deg, ${colors.error[500]} 0%, ${colors.error[700]} 100%)`,
   warning: `linear-gradient(135deg, ${colors.warning[500]} 0%, ${colors.warning[700]} 100%)`,
   info: `linear-gradient(135deg, ${colors.info[500]} 0%, ${colors.info[700]} 100%)`,
   dark: `linear-gradient(135deg, ${colors.neutral[800]} 0%, ${colors.neutral[950]} 100%)`,
-  aurora: `linear-gradient(135deg, ${colors.primary[400]} 0%, ${colors.secondary[500]} 50%, ${colors.info[400]} 100%)`,
+  // "Trust" gradient: indigo through teal - the brand pairing, used for hero
+  // surfaces, logo marks, and the verified-proof centerpiece.
+  aurora: `linear-gradient(135deg, ${colors.primary[500]} 0%, ${colors.secondary[500]} 60%, ${colors.info[400]} 100%)`,
   sunset: `linear-gradient(135deg, ${colors.warning[400]} 0%, ${colors.error[500]} 100%)`,
-  ocean: `linear-gradient(135deg, ${colors.info[400]} 0%, ${colors.primary[600]} 100%)`,
+  ocean: `linear-gradient(135deg, ${colors.info[400]} 0%, ${colors.primary[700]} 100%)`,
   forest: `linear-gradient(135deg, ${colors.success[400]} 0%, ${colors.success[700]} 100%)`,
 };
 

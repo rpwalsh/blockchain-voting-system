@@ -11,150 +11,144 @@ describe('Home Page', () => {
   describe('Hero Section', () => {
     it('renders main heading', () => {
       renderWithRouter(<Home />);
-      
-      expect(screen.getByRole('heading', { level: 1, name: /trustless voting system/i })).toBeInTheDocument();
+
+      expect(screen.getByRole('heading', { level: 1, name: /elections that prove themselves/i })).toBeInTheDocument();
     });
 
     it('renders tagline description', () => {
       renderWithRouter(<Home />);
-      
-      expect(screen.getByText(/cryptographically secure, tamper-proof voting platform/i)).toBeInTheDocument();
+
+      expect(screen.getByText(/cryptographically verifiable election platform/i)).toBeInTheDocument();
     });
 
     it('renders call-to-action buttons', () => {
       renderWithRouter(<Home />);
-      
-      expect(screen.getByRole('link', { name: /watch live demo/i })).toBeInTheDocument();
+
+      expect(screen.getAllByRole('link', { name: /verify your vote/i }).length).toBeGreaterThan(0);
       expect(screen.getByRole('link', { name: /view elections/i })).toBeInTheDocument();
     });
 
     it('view elections button links to elections page', () => {
       renderWithRouter(<Home />);
-      
+
       const viewElections = screen.getByRole('link', { name: /view elections/i });
       expect(viewElections).toHaveAttribute('href', '/elections');
     });
 
     it('verify button links to verify page', () => {
       renderWithRouter(<Home />);
-      
-      const verifyLink = screen.getByRole('link', { name: /verify your vote/i });
+
+      const verifyLink = screen.getAllByRole('link', { name: /verify your vote/i })[0];
       expect(verifyLink).toHaveAttribute('href', '/verify');
     });
   });
 
-  describe('Feature Cards', () => {
-    it('renders End-to-End Encryption feature', () => {
+  describe('Differentiator cards', () => {
+    it('renders the Merkle audit trail differentiator', () => {
       renderWithRouter(<Home />);
-      
-      expect(screen.getByText(/end-to-end encryption/i)).toBeInTheDocument();
-      expect(screen.getByText(/every vote is encrypted from the moment you cast it/i)).toBeInTheDocument();
+
+      // Anchored: the hero subtitle also mentions "real Merkle audit trails" in
+      // passing, so an unanchored match would hit both elements.
+      expect(screen.getByText(/^real merkle audit trail$/i)).toBeInTheDocument();
     });
 
-    it('renders Public Verifiability feature', () => {
+    it('renders the zero-knowledge eligibility differentiator', () => {
       renderWithRouter(<Home />);
-      
-      // Multiple elements with this text exist - use getAllBy
-      const elements = screen.getAllByText(/public verifiability/i);
-      expect(elements.length).toBeGreaterThan(0);
+
+      expect(screen.getByText(/anonymous eligibility, not just anonymous ballots/i)).toBeInTheDocument();
+      expect(screen.getByText(/real groth16 zk-snark circuit/i)).toBeInTheDocument();
     });
 
-    it('renders Zero-Knowledge Proofs feature', () => {
+    it('renders the homomorphic tally differentiator', () => {
       renderWithRouter(<Home />);
-      
-      expect(screen.getByText(/zero-knowledge proofs/i)).toBeInTheDocument();
-      expect(screen.getByText(/your voting eligibility is verified without revealing your identity/i)).toBeInTheDocument();
+
+      expect(screen.getByText(/homomorphic tally, independently re-checkable/i)).toBeInTheDocument();
     });
 
-    it('renders Immutable Audit Trail feature', () => {
+    it('renders the external timestamp anchoring differentiator', () => {
       renderWithRouter(<Home />);
-      
-      expect(screen.getByText(/immutable audit trail/i)).toBeInTheDocument();
-      expect(screen.getByText(/every action creates a signed, timestamped ledger entry/i)).toBeInTheDocument();
+
+      // Anchored for the same reason as the Merkle card above.
+      expect(screen.getByText(/^external timestamp anchoring$/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/opentimestamps/i).length).toBeGreaterThan(0);
     });
 
-    it('renders Anonymous Voting Tokens feature', () => {
+    it('renders the independent verifier differentiator', () => {
       renderWithRouter(<Home />);
-      
-      expect(screen.getByText(/anonymous voting tokens/i)).toBeInTheDocument();
+
+      expect(screen.getByText(/verifiable without trusting us/i)).toBeInTheDocument();
     });
 
-    it('renders Merkle Tree Verification feature', () => {
+    it('renders the multi-party admin approval differentiator', () => {
       renderWithRouter(<Home />);
-      
-      expect(screen.getByText(/merkle tree verification/i)).toBeInTheDocument();
+
+      expect(screen.getByText(/multi-party admin approval/i)).toBeInTheDocument();
     });
   });
 
   describe('How It Works Section', () => {
     it('renders section heading', () => {
       renderWithRouter(<Home />);
-      
+
       expect(screen.getByRole('heading', { name: /how it works/i })).toBeInTheDocument();
     });
 
     it('renders all four steps', () => {
       renderWithRouter(<Home />);
-      
-      expect(screen.getByText(/1\. voter registration/i)).toBeInTheDocument();
+
+      expect(screen.getByText(/1\. anonymous enrollment/i)).toBeInTheDocument();
       expect(screen.getByText(/2\. cast your vote/i)).toBeInTheDocument();
       expect(screen.getByText(/3\. verify your vote/i)).toBeInTheDocument();
-      expect(screen.getByText(/4\. tallying & results/i)).toBeInTheDocument();
-    });
-
-    it('renders step descriptions', () => {
-      renderWithRouter(<Home />);
-      
-      expect(screen.getByText(/register with your government id/i)).toBeInTheDocument();
-      expect(screen.getByText(/use your voting token to cast an encrypted ballot/i)).toBeInTheDocument();
-      expect(screen.getByText(/use your receipt hash to verify your vote/i)).toBeInTheDocument();
+      expect(screen.getByText(/4\. tally & finalize/i)).toBeInTheDocument();
     });
   });
 
-  describe('Security Guarantees Section', () => {
-    it('renders section heading', () => {
+  describe('Audience CTA strip', () => {
+    it('links to the integrity dashboard for admins', () => {
       renderWithRouter(<Home />);
-      
-      expect(screen.getByRole('heading', { name: /security guarantees/i })).toBeInTheDocument();
+
+      const link = screen.getByRole('link', { name: /open the integrity dashboard/i });
+      expect(link).toHaveAttribute('href', '/admin/integrity');
     });
 
-    it('renders all security guarantees', () => {
-      renderWithRouter(<Home />);
-      
-      expect(screen.getByText(/voter anonymity/i)).toBeInTheDocument();
-      expect(screen.getByText(/vote integrity/i)).toBeInTheDocument();
-      // Public verifiability appears multiple times
-      expect(screen.getAllByText(/public verifiability/i).length).toBeGreaterThan(0);
-      // No single point of failure may appear in multiple places
-      const noSinglePointElements = screen.getAllByText(/no single point of failure/i);
-      expect(noSinglePointElements.length).toBeGreaterThan(0);
-      expect(screen.getByText(/coercion resistance/i)).toBeInTheDocument();
-    });
-  });
-
-  describe('Navigation Links', () => {
     it('public audit button links to audit page', () => {
       renderWithRouter(<Home />);
-      
+
       const auditLink = screen.getByRole('link', { name: /public audit trail/i });
       expect(auditLink).toHaveAttribute('href', '/audit');
+    });
+  });
+
+  describe('Honesty footer', () => {
+    it('discloses no compliance certifications are held', () => {
+      renderWithRouter(<Home />);
+
+      expect(screen.getByText(/no fips 140-2, common criteria, soc 2, or iso 27001 certification/i)).toBeInTheDocument();
+    });
+
+    it('links to the whitepaper for the full breakdown', () => {
+      renderWithRouter(<Home />);
+
+      const whitepaperLinks = screen.getAllByRole('link', { name: /whitepaper/i });
+      expect(whitepaperLinks.length).toBeGreaterThan(0);
+      expect(whitepaperLinks[0]).toHaveAttribute('href', '/whitepaper');
     });
   });
 
   describe('Accessibility', () => {
     it('has proper heading hierarchy', () => {
       renderWithRouter(<Home />);
-      
+
       const h1 = screen.getByRole('heading', { level: 1 });
       expect(h1).toBeInTheDocument();
-      
+
       const h2s = screen.getAllByRole('heading', { level: 2 });
       expect(h2s.length).toBeGreaterThan(0);
     });
 
     it('all links have accessible names', () => {
       renderWithRouter(<Home />);
-      
+
       const links = screen.getAllByRole('link');
       links.forEach((link: HTMLElement) => {
         expect(link).toHaveAccessibleName();
