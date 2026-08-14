@@ -22,127 +22,137 @@ import tally, { ElGamalCiphertext, TallyKeyShare } from '../crypto/tally';
 
 const router = Router();
 
-interface TallyProofBundle {
+export interface TallyProofBundle {
   summedCiphertext: ElGamalCiphertext;
   partialDecryptions: ReturnType<typeof tally.computePartialDecryption>[];
   trusteePublicCommitments: { index: number; publicCommitment: TallyKeyShare['publicCommitment'] }[];
   threshold: number;
 }
 
+export class TallyError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/**
+ * Core tally logic, shared by POST /:electionId/tally/compute and the
+ * quorum-gated TALLY action in routes/election-approvals.ts - one real
+ * implementation, not two copies that could drift. Idempotent: a second
+ * call returns the existing results rather than re-tallying. Throws
+ * TallyError (with a status code) on any failure.
+ */
+export async function computeTally(electionId: string): Promise<{ alreadyTallied: boolean; totalBallots: number; results: { candidateId: string; voteCount: number; percentage: number | null }[] }> {
+  const election = await prisma.election.findUnique({ where: { id: electionId } });
+  if (!election) throw new TallyError(404, 'Election not found');
+  if (!['VOTING', 'TALLYING', 'COMPLETED'].includes(election.status)) {
+    throw new TallyError(409, `Election status ${election.status} is not eligible for tallying`);
+  }
+  if (!election.tallyPublicKey || !election.tallyKeyShares || !election.tallyThreshold) {
+    throw new TallyError(500, 'Election has no tally keypair configured');
+  }
+
+  const existing = await prisma.tallyResult.findMany({ where: { electionId } });
+  if (existing.length > 0) {
+    return { alreadyTallied: true, totalBallots: await prisma.vote.count({ where: { electionId } }), results: existing };
+  }
+
+  const candidates = await prisma.candidate.findMany({ where: { electionId }, orderBy: { order: 'asc' } });
+  if (candidates.length === 0) throw new TallyError(409, 'Election has no candidates');
+
+  const votes = await prisma.vote.findMany({ where: { electionId }, select: { tallyCiphertexts: true } });
+  const totalBallots = votes.length;
+  if (totalBallots === 0) throw new TallyError(409, 'No ballots cast yet');
+
+  const shares: TallyKeyShare[] = JSON.parse(election.tallyKeyShares);
+  const threshold = election.tallyThreshold;
+  const trustees = shares.slice(0, threshold);
+
+  const computed: { candidateId: string; voteCount: number; bundle: TallyProofBundle }[] = [];
+  let totalDecrypted = 0;
+
+  for (const candidate of candidates) {
+    const ciphertexts: ElGamalCiphertext[] = votes
+      .map(v => {
+        const parsed = v.tallyCiphertexts ? JSON.parse(v.tallyCiphertexts) : null;
+        const entry = parsed?.find((c: any) => c.candidateId === candidate.id);
+        return entry?.ciphertext as ElGamalCiphertext | undefined;
+      })
+      .filter((c): c is ElGamalCiphertext => !!c);
+
+    if (ciphertexts.length !== totalBallots) {
+      throw new TallyError(500, `Ballot ${candidate.id} is missing a tally ciphertext - cannot certify a partial tally`);
+    }
+
+    const summedCiphertext = tally.homomorphicSum(ciphertexts);
+    const partialDecryptions = trustees.map(share => tally.computePartialDecryption(share, summedCiphertext));
+
+    for (const partial of partialDecryptions) {
+      const trustee = trustees.find(t => t.index === partial.index)!;
+      if (!tally.verifyPartialDecryption(trustee.publicCommitment, summedCiphertext, partial)) {
+        throw new TallyError(500, `Partial decryption from trustee ${partial.index} failed self-verification`);
+      }
+    }
+
+    const combined = tally.combinePartialDecryptions(partialDecryptions);
+    const voteCount = tally.decryptSum(summedCiphertext, combined, totalBallots);
+
+    const bundle: TallyProofBundle = {
+      summedCiphertext,
+      partialDecryptions,
+      trusteePublicCommitments: trustees.map(t => ({ index: t.index, publicCommitment: t.publicCommitment })),
+      threshold,
+    };
+
+    computed.push({ candidateId: candidate.id, voteCount, bundle });
+    totalDecrypted += voteCount;
+  }
+
+  // Sanity check: a one-hot encoding means every candidate's decrypted
+  // count summed across candidates must equal the total ballot count - if
+  // it doesn't, something is wrong with the ciphertexts or the decryption,
+  // and publishing the result would be dishonest.
+  if (totalDecrypted !== totalBallots) {
+    throw new TallyError(500, `Decrypted tally (${totalDecrypted}) does not match total ballots (${totalBallots}) - refusing to certify`);
+  }
+
+  const created = await prisma.$transaction(
+    computed.map(r =>
+      prisma.tallyResult.create({
+        data: {
+          electionId,
+          candidateId: r.candidateId,
+          voteCount: r.voteCount,
+          percentage: totalBallots > 0 ? (r.voteCount / totalBallots) * 100 : 0,
+          proof: JSON.stringify(r.bundle),
+          merkleRoot: election.merkleRoot || '',
+        },
+      })
+    )
+  );
+
+  return {
+    alreadyTallied: false,
+    totalBallots,
+    results: created.map(r => ({ candidateId: r.candidateId, voteCount: r.voteCount, percentage: r.percentage })),
+  };
+}
+
 /**
  * POST /api/elections/:electionId/tally/compute
- * Computes and certifies the real cryptographic tally. Authorization for
- * this action (who may trigger it, multi-party sign-off) is Milestone 5
- * scope - this endpoint implements the cryptography, not the operational
- * access control around it.
+ * See computeTally() above for the actual logic.
  */
 router.post('/:electionId/tally/compute', async (req: Request, res: Response) => {
   try {
     const { electionId } = req.params;
-    const election = await prisma.election.findUnique({ where: { id: electionId } });
-    if (!election) return res.status(404).json({ success: false, error: 'Election not found' });
-    if (!['VOTING', 'TALLYING', 'COMPLETED'].includes(election.status)) {
-      return res.status(409).json({ success: false, error: `Election status ${election.status} is not eligible for tallying` });
-    }
-    if (!election.tallyPublicKey || !election.tallyKeyShares || !election.tallyThreshold) {
-      return res.status(500).json({ success: false, error: 'Election has no tally keypair configured' });
-    }
-
-    const existing = await prisma.tallyResult.findMany({ where: { electionId } });
-    if (existing.length > 0) {
-      return res.json({ success: true, alreadyTallied: true, results: existing });
-    }
-
-    const candidates = await prisma.candidate.findMany({ where: { electionId }, orderBy: { order: 'asc' } });
-    if (candidates.length === 0) {
-      return res.status(409).json({ success: false, error: 'Election has no candidates' });
-    }
-
-    const votes = await prisma.vote.findMany({ where: { electionId }, select: { tallyCiphertexts: true } });
-    const totalBallots = votes.length;
-    if (totalBallots === 0) {
-      return res.status(409).json({ success: false, error: 'No ballots cast yet' });
-    }
-
-    const shares: TallyKeyShare[] = JSON.parse(election.tallyKeyShares);
-    const threshold = election.tallyThreshold;
-    const trustees = shares.slice(0, threshold);
-
-    const results: any[] = [];
-    let totalDecrypted = 0;
-
-    for (const candidate of candidates) {
-      const ciphertexts: ElGamalCiphertext[] = votes
-        .map(v => {
-          const parsed = v.tallyCiphertexts ? JSON.parse(v.tallyCiphertexts) : null;
-          const entry = parsed?.find((c: any) => c.candidateId === candidate.id);
-          return entry?.ciphertext as ElGamalCiphertext | undefined;
-        })
-        .filter((c): c is ElGamalCiphertext => !!c);
-
-      if (ciphertexts.length !== totalBallots) {
-        return res.status(500).json({
-          success: false,
-          error: `Ballot ${candidate.id} is missing a tally ciphertext - cannot certify a partial tally`,
-        });
-      }
-
-      const summedCiphertext = tally.homomorphicSum(ciphertexts);
-      const partialDecryptions = trustees.map(share => tally.computePartialDecryption(share, summedCiphertext));
-
-      for (const partial of partialDecryptions) {
-        const trustee = trustees.find(t => t.index === partial.index)!;
-        if (!tally.verifyPartialDecryption(trustee.publicCommitment, summedCiphertext, partial)) {
-          return res.status(500).json({ success: false, error: `Partial decryption from trustee ${partial.index} failed self-verification` });
-        }
-      }
-
-      const combined = tally.combinePartialDecryptions(partialDecryptions);
-      const voteCount = tally.decryptSum(summedCiphertext, combined, totalBallots);
-
-      const bundle: TallyProofBundle = {
-        summedCiphertext,
-        partialDecryptions,
-        trusteePublicCommitments: trustees.map(t => ({ index: t.index, publicCommitment: t.publicCommitment })),
-        threshold,
-      };
-
-      results.push({ candidateId: candidate.id, candidateName: candidate.name, voteCount, bundle });
-      totalDecrypted += voteCount;
-    }
-
-    // Sanity check: a one-hot encoding means every candidate's decrypted
-    // count summed across candidates must equal the total ballot count -
-    // if it doesn't, something is wrong with the ciphertexts or the
-    // decryption, and publishing the result would be dishonest.
-    if (totalDecrypted !== totalBallots) {
-      return res.status(500).json({
-        success: false,
-        error: `Decrypted tally (${totalDecrypted}) does not match total ballots (${totalBallots}) - refusing to certify`,
-      });
-    }
-
-    const created = await prisma.$transaction(
-      results.map(r =>
-        prisma.tallyResult.create({
-          data: {
-            electionId,
-            candidateId: r.candidateId,
-            voteCount: r.voteCount,
-            percentage: totalBallots > 0 ? (r.voteCount / totalBallots) * 100 : 0,
-            proof: JSON.stringify(r.bundle),
-            merkleRoot: election.merkleRoot || '',
-          },
-        })
-      )
-    );
-
-    return res.status(201).json({
-      success: true,
-      totalBallots,
-      results: created.map(r => ({ candidateId: r.candidateId, voteCount: r.voteCount, percentage: r.percentage })),
-    });
+    const result = await computeTally(electionId);
+    return res.status(result.alreadyTallied ? 200 : 201).json({ success: true, ...result });
   } catch (error: any) {
+    if (error instanceof TallyError) {
+      return res.status(error.status).json({ success: false, error: error.message });
+    }
     return res.status(500).json({ success: false, error: error.message });
   }
 });
