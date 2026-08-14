@@ -153,8 +153,14 @@ model OrganizationAuthProvider {
   organizationId  String
 
   type            String   // OIDC
-  name            String   // "Okta", "AzureAD", "Auth0", "Google"
+  name            String   // "Okta", "AzureAD", "Auth0", "Google", "ID.me", "Login.gov"
   enabled         Boolean  @default(true)
+  // ADMIN_SSO: org staff login (existing). VOTER_IDENTITY_VERIFICATION: an
+  // identity-proofing provider (ID.me, Login.gov, etc) voters authenticate
+  // against before registering - see routes/voter-identity.ts. Same OIDC
+  // config shape serves both; the purpose just changes what a successful
+  // callback does with the verified claims.
+  purpose         String   @default("ADMIN_SSO")
 
   // OIDC configuration
   issuerUrl       String
@@ -376,6 +382,7 @@ model Election {
   nullifiers      Nullifier[]
   trusteeDecryptionShares TrusteeDecryptionShare[]
   approvals       ElectionApproval[]
+  identityVerifications VoterIdentityVerification[]
 
   @@index([organizationId])
   @@index([status])
@@ -752,6 +759,29 @@ model ElectionApprovalSignature {
 
   @@unique([approvalId, approverId])
   @@index([approvalId])
+}
+
+// A real external identity-proofing result (ID.me, Login.gov, or any OIDC
+// provider configured with purpose=VOTER_IDENTITY_VERIFICATION) binding a
+// claimed externalId to a verified real-world identity before registration
+// is allowed - see routes/voter-identity.ts. subjectClaim is the IdP's
+// verified `sub`; the unique constraint on (electionId, providerId,
+// subjectClaim) stops one verified real person from producing verification
+// records for multiple different externalId claims in the same election.
+model VoterIdentityVerification {
+  id           String    @id @default(uuid())
+  electionId   String
+  providerId   String
+  externalId   String
+  subjectClaim String
+  verifiedAt   DateTime  @default(now())
+  expiresAt    DateTime
+  consumedAt   DateTime?
+
+  election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+
+  @@unique([electionId, providerId, subjectClaim])
+  @@index([electionId, externalId])
 }
 
 // ============================================================================
