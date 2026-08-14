@@ -12,6 +12,8 @@ This repository currently contains two product surfaces:
 - Core trustless voting and audit functionality.
 - blockchain-voting-system governance workflows built on the same backend.
 
+![Election Integrity Dashboard showing live cryptographic checks, ballots-over-time and candidate-standings charts, and tally verification, all passing](docs/screenshots/integrity-dashboard.jpg)
+
 ## Why this exists
 
 The goal is a verifiable voting system where:
