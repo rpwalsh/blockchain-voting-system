@@ -95,6 +95,61 @@ export const voterService = {
   },
 };
 
+// Real, currently-mounted endpoints (backend/src/routes/crypto-audit.ts).
+// No auth required - these are public integrity checks by design.
+export const cryptoAuditService = {
+  async getCapabilities() {
+    const response = await api.get('/crypto-audit/capabilities');
+    return response.data;
+  },
+
+  async getAlgorithms() {
+    const response = await api.get('/crypto-audit/algorithms');
+    return response.data;
+  },
+
+  async getElectionIntegrity(electionId: string) {
+    const response = await api.get(`/crypto-audit/election/${electionId}/integrity`);
+    return response.data;
+  },
+
+  async getMerkleTree(electionId: string) {
+    const response = await api.get(`/crypto-audit/election/${electionId}/merkle-tree`);
+    return response.data;
+  },
+
+  async verifyReceipt(receiptHash: string, electionId: string) {
+    const response = await api.post('/crypto-audit/verify-receipt', { receiptHash, electionId });
+    return response.data;
+  },
+};
+
+// Real, currently-mounted endpoints (backend/src/routes/finalization.ts).
+export const finalizationService = {
+  async getFinalization(electionId: string) {
+    const response = await api.get(`/elections/${electionId}/finalization`);
+    return response.data;
+  },
+
+  async getAnchorStatus(electionId: string) {
+    const response = await api.get(`/elections/${electionId}/finalization/anchor`);
+    return response.data;
+  },
+};
+
+// Real, currently-mounted endpoints (backend/src/routes/election-player.ts).
+export const electionPlayerService = {
+  async getTimeline(electionId: string) {
+    const response = await api.get(`/election-player/${electionId}/timeline`);
+    return response.data;
+  },
+
+  async getStats(electionId: string) {
+    const response = await api.get(`/election-player/${electionId}/stats`);
+    return response.data;
+  },
+};
+
 export const auditService = {
   async getLedger(electionId?: string, limit = 100, offset = 0) {
     const response = await api.get('/audit/ledger', {

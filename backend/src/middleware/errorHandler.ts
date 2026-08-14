@@ -21,17 +21,29 @@ export const errorHandler = (
 ) => {
   if (err instanceof AppError) {
     logger.error(`${err.statusCode} - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}`);
-    
+
     return res.status(err.statusCode).json({
       success: false,
       error: err.message,
     });
   }
-  
+
+  // Client-error libraries (e.g. body-parser on malformed JSON) set
+  // status/statusCode themselves rather than throwing AppError - a 4xx
+  // from the request itself isn't a server error.
+  const libraryStatus = (err as any).statusCode || (err as any).status;
+  if (typeof libraryStatus === 'number' && libraryStatus >= 400 && libraryStatus < 500) {
+    logger.error(`${libraryStatus} - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}`);
+    return res.status(libraryStatus).json({
+      success: false,
+      error: err.message,
+    });
+  }
+
   // Unknown error
   logger.error(`500 - ${err.message} - ${req.originalUrl} - ${req.method} - ${req.ip}`);
   logger.error(err.stack);
-  
+
   return res.status(500).json({
     success: false,
     error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,

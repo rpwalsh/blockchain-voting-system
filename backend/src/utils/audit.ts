@@ -1,25 +1,15 @@
 /**
- * COMPREHENSIVE AUDIT LOGGING SYSTEM
- * ==================================
- * Security Level: Nation-state scrutiny ready
- * 
- * PURPOSE:
- * - Immutable audit trail of all system actions
- * - Forensic investigation support
- * - Compliance with election law requirements
- * - Anomaly detection for security monitoring
- * 
- * FEATURES:
- * - Structured logging with Winston
- * - Separate security event log
- * - Automatic PII sanitization
- * - Chained entries for tamper detection
- * - Performance optimized (async writes)
+ * Audit logging: request/action log (AuditLog), security event log
+ * (SecurityEvent), and the hash-chained election ledger (LedgerEntry, via
+ * createLedgerEntry). See docs/protocol.md, "Stage: Audit" and
+ * docs/threat-model.md for what the ledger chain actually protects against
+ * and its current implementation status.
  */
 
 import { prisma } from '../db';
 import { logger } from './logger';
 import crypto from '../crypto/engine';
+import { domainHash, DOMAIN } from '../crypto/canonical';
 
 export enum AuditAction {
   // Election Management
@@ -210,39 +200,49 @@ export async function createLedgerEntry(
   data: Record<string, any>,
   signerPrivateKey: string
 ): Promise<void> {
-  try {
-    // Get previous entry for chaining
+  const signerPublicKey = crypto.derivePublicKey(signerPrivateKey);
+  const sanitizedData = JSON.stringify(sanitizePII(data));
+
+  // Read-then-write against previousEntryHash races under concurrent
+  // callers; the @@unique([electionId, previousEntryHash]) constraint
+  // rejects a fork instead of silently persisting it, so retry against
+  // the new tip on conflict rather than trusting a single read.
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const previousEntry = await prisma.ledgerEntry.findFirst({
       where: { electionId },
       orderBy: { timestamp: 'desc' },
     });
-    
-    const sanitizedData = JSON.stringify(sanitizePII(data));
-    const dataHash = crypto.hashVotingToken(sanitizedData); // SHA3-256
-    
-    // Get signer public key
-    const keyPair = crypto.generateKeyPair();
-    const signature = crypto.signData(dataHash, signerPrivateKey);
-    
-    await prisma.ledgerEntry.create({
-      data: {
-        electionId,
-        entryType,
-        data: sanitizedData,
-        dataHash,
-        signature,
-        signerPublicKey: keyPair.publicKey,
-        previousEntryHash: previousEntry?.dataHash,
-      },
-    });
-    
-    logger.info('Ledger entry created', {
+
+    const dataHash = domainHash(DOMAIN.ELECTION_LEDGER, {
       electionId,
       entryType,
+      data: sanitizedData,
+      previousEntryHash: previousEntry?.dataHash || null,
     });
-  } catch (error) {
-    logger.error('Failed to create ledger entry', { error });
-    throw error;
+    const signature = crypto.signData(dataHash, signerPrivateKey);
+
+    try {
+      await prisma.ledgerEntry.create({
+        data: {
+          electionId,
+          entryType,
+          data: sanitizedData,
+          dataHash,
+          signature,
+          signerPublicKey,
+          previousEntryHash: previousEntry?.dataHash,
+        },
+      });
+      logger.info('Ledger entry created', { electionId, entryType });
+      return;
+    } catch (error: any) {
+      const isChainConflict = error?.code === 'P2002';
+      if (!isChainConflict || attempt === MAX_ATTEMPTS) {
+        logger.error('Failed to create ledger entry', { error });
+        throw error;
+      }
+    }
   }
 }
 

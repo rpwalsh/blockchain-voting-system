@@ -12,12 +12,12 @@ import {
   AuditResult,
   SecuritySeverity,
 } from '../../utils/audit';
-import { prisma } from '../../index';
+import { prisma } from '../../db';
 import { logger } from '../../utils/logger';
 import crypto from '../../crypto/engine';
 
-// Mock prisma
-jest.mock('../../index', () => ({
+// Mock prisma at '../../db', matching utils/audit.ts's actual import path.
+jest.mock('../../db', () => ({
   prisma: {
     auditLog: {
       create: jest.fn(),
@@ -50,6 +50,7 @@ jest.mock('../../crypto/engine', () => ({
     privateKey: 'test-private-key',
   }),
   signData: jest.fn().mockReturnValue('test-signature'),
+  derivePublicKey: jest.fn().mockReturnValue('test-derived-public-key'),
 }));
 
 describe('Audit Utilities', () => {

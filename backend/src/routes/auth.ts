@@ -4,15 +4,17 @@
  */
 
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import jwt, { SignOptions } from 'jsonwebtoken';
+import { loadConfig } from '../config';
+import crypto from '../crypto/engine';
+import { prisma } from '../db';
 
 const router = Router();
-const prisma = new PrismaClient();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production-2024';
-const JWT_EXPIRES_IN: SignOptions['expiresIn'] = (process.env.JWT_EXPIRES_IN as any) || '7d';
+const config = loadConfig();
+const JWT_SECRET = config.jwtSecret;
+const JWT_EXPIRES_IN: SignOptions['expiresIn'] = config.jwtExpiresIn as any;
 
 async function resolveOrganization(orgSlug?: string) {
   const slug = orgSlug || process.env.DEFAULT_ORG_SLUG || 'public-org';
@@ -26,8 +28,8 @@ async function resolveOrganization(orgSlug?: string) {
         type: 'MUNICIPAL',
         primaryContact: 'Admin',
         email: 'admin@example.com',
-        publicKey: 'default-key',
-        apiKey: 'default-api-key',
+        publicKey: crypto.generateKeyPair().publicKey,
+        apiKey: crypto.generateVotingToken(),
       },
     });
   }
@@ -103,59 +105,40 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password, username, orgSlug } = req.body;
 
-    console.log('Login attempt:', { email, username, hasPassword: !!password });
-
     // Support both email and username login
     const loginId = email || username;
-    
+
     if (!loginId || !password) {
-      console.log('Missing credentials');
       return res.status(400).json({ message: 'Username/email and password are required' });
     }
 
-    // Check for super admin login first (username: admin, password: admin)
-    if (loginId === 'admin' && password === 'admin') {
-      console.log('Super admin login detected');
-      // Super admin login
-      let superAdmin = await prisma.superAdmin.findUnique({
-        where: { username: 'admin' }
-      });
-      
-      if (!superAdmin) {
-        console.log('Creating new super admin');
-        // Create super admin if doesn't exist
-        const passwordHash = await bcrypt.hash('admin', 12);
-        superAdmin = await prisma.superAdmin.create({
-          data: {
-            username: 'admin',
-            passwordHash,
-            totpSecret: 'not-configured',
-            publicKey: 'super-admin-key'
-          }
-        });
+    // Super admin accounts are provisioned out-of-band via
+    // scripts/bootstrap-superadmin.ts; login only checks bcrypt against a
+    // stored hash, never auto-creates.
+    const superAdminCandidate = await prisma.superAdmin.findUnique({ where: { username: loginId } });
+    if (superAdminCandidate) {
+      const validSuperAdminPassword = await bcrypt.compare(password, superAdminCandidate.passwordHash);
+      if (!validSuperAdminPassword) {
+        return res.status(401).json({ message: 'Invalid credentials' });
       }
-      
-      console.log('Super admin found/created:', superAdmin.id);
-      
+
       const token = jwt.sign(
-        { 
-          superAdminId: superAdmin.id, 
-          username: superAdmin.username, 
+        {
+          superAdminId: superAdminCandidate.id,
+          username: superAdminCandidate.username,
           role: 'SUPER_ADMIN',
-          level: 12 
+          level: 12
         },
         JWT_SECRET,
         { expiresIn: JWT_EXPIRES_IN }
       );
-      
-      console.log('Token generated, sending response');
-      
+
       return res.json({
         message: 'Super Admin login successful',
         token,
         user: {
-          id: superAdmin.id,
-          username: superAdmin.username,
+          id: superAdminCandidate.id,
+          username: superAdminCandidate.username,
           role: 'SUPER_ADMIN',
           level: 12
         }

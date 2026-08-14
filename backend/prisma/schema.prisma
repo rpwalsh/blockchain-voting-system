@@ -296,17 +296,56 @@ model Election {
   endDate         DateTime
   status          String   @default("DRAFT") // DRAFT|REGISTRATION|VOTING|TALLYING|COMPLETED|CANCELLED|DISPUTED
   
-  // Cryptography
+  // Cryptography: encryption keypair (NaCl box) used to encrypt ballots.
+  // NOTE: privateKey is stored in plaintext today, not "encrypted with
+  // HSM/KMS" as an earlier version of this comment claimed - no HSM/KMS
+  // integration exists in this codebase. keyShares (real Shamir K-of-N
+  // split, see crypto.splitSecretShamir) is populated as a genuine
+  // threshold-recovery safety net, but the decrypt path still reads the
+  // plaintext privateKey directly rather than requiring share
+  // reconstruction - see docs/cryptography.md and docs/threat-model.md,
+  // "Colluding trustees", for the honest status of this gap.
   publicKey       String   // Election public key
   privateKeyHash  String   // Verify without storing plaintext
-  privateKey      String   // ENCRYPTED with HSM/KMS + Shamir split
-  keyShares       String?  // JSON of threshold key shares
-  
+  privateKey      String
+  keyShares       String?  // JSON ThresholdKeyShare[] from splitSecretShamir
+
+  // Signing keypair (Ed25519) for this election's ledger entries and
+  // finalization manifest - see docs/protocol.md "Stage: Finalization".
+  // Single-key today; M-of-N threshold signing is Milestone 5 scope.
+  signingPublicKey  String?
+  signingPrivateKey String?
+
+  // Anonymous eligibility (see docs/protocol.md "Stage: Credential
+  // issuance" and backend/circuits/eligibility.circom). Root of the live
+  // Poseidon Merkle tree of enrolled voters' commitments; voters prove
+  // membership without revealing which leaf. Mutable during REGISTRATION
+  // (enrollment/revocation append or remove leaves); frozen once VOTING
+  // starts - see routes/eligibility.ts.
+  eligibilityRoot   String?
+
+  // Threshold homomorphic tally (see docs/protocol.md "Stage: Tally" and
+  // crypto/tally.ts). EC ElGamal keypair over secp256k1, distinct from the
+  // NaCl box keypair above. Unlike privateKey/keyShares, no plaintext
+  // private scalar is ever persisted here - tallyKeyShares (Shamir K-of-N)
+  // is the only way to recover it, and only via combining >= K trustees'
+  // partial decryptions at tally time.
+  tallyPublicKey    String?
+  tallyKeyShares    String?  // JSON ThresholdKeyShare[] from splitSecretShamir
+  tallyThreshold    Int?     // K in the K-of-N trustee scheme
+
   // Blockchain anchoring
   merkleRoot      String?
   blockchainTx    String?  // Ethereum/Hyperledger transaction hash
   blockchainBlock Int?     // Block number
-  
+
+  // Multi-party administration (see docs/protocol.md "Stage: Election
+  // configuration / certification" and routes/election-approvals.ts).
+  // Set only once a quorum-approved CERTIFY action executes - not by any
+  // single admin's direct write.
+  certifiedAt               DateTime?
+  certifiedConfigurationHash String?
+
   // Configuration
   allowAnonymous  Boolean  @default(true)  // Anonymous voting
   requireId       Boolean  @default(true)  // ID verification
@@ -331,7 +370,13 @@ model Election {
   votes           Vote[]
   tallyResults    TallyResult[]
   ledgerEntries   LedgerEntry[]
-  
+  challengeNonces ChallengeNonce[]
+  finalization    ElectionFinalization?
+  eligibilityCommitments EligibilityCommitment[]
+  nullifiers      Nullifier[]
+  trusteeDecryptionShares TrusteeDecryptionShare[]
+  approvals       ElectionApproval[]
+
   @@index([organizationId])
   @@index([status])
   @@index([type])
@@ -372,7 +417,8 @@ model Voter {
   
   // Anonymized identity
   identityHash        String    // PBKDF2 210K iterations
-  votingTokenHash     String    @unique // SHA3-256
+  votingTokenHash     String    @unique // SHA3-256, for fast lookup/uniqueness
+  tokenCommitment     String?   // real Poseidon commitment (computeTokenCommitment) - what the token_validity ZK proof is checked against at vote time
   publicKey           String    // Voter's public key
   registrationProof   String    // ZK proof of eligibility
   
@@ -407,8 +453,16 @@ model Vote {
   
   // Encrypted vote
   encryptedVote     String   // NaCl box encrypted
-  votingTokenHash   String   // Links to voter (anonymously)
+  votingTokenHash   String   // legacy per-voter path; equals eligibilityNullifier on the anonymous path
   voteProof         String   // ZK proof vote is valid
+  eligibilityNullifier String? // Nullifier from the anonymous eligibility proof, if cast via that path
+
+  // Homomorphic tally ciphertexts (see crypto/tally.ts): one EC ElGamal
+  // encryption of 0/1 per candidate (one-hot), JSON array of
+  // {candidateId, c1, c2}. The tally route sums these across all ballots
+  // and threshold-decrypts the sum - candidateId above is not the source
+  // of truth for a cryptographically certified result once this is set.
+  tallyCiphertexts  String?
   
   // Verification
   receiptHash       String   @unique // Voter's receipt
@@ -478,8 +532,8 @@ model LedgerEntry {
   
   // Data
   data              String   // JSON blob
-  dataHash          String   // SHA3-256 of data
-  
+  dataHash          String   // domainHash(ELECTION-LEDGER, {electionId, entryType, data, previousEntryHash}) - see crypto/canonical.ts
+
   // Chaining (blockchain-style)
   previousEntryHash String?  // Hash of previous entry
   signature         String   // Ed25519 signature
@@ -496,10 +550,208 @@ model LedgerEntry {
   
   election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
 
+  // Blocks concurrent writers from forking the chain (see createLedgerEntry).
+  @@unique([electionId, previousEntryHash])
   @@index([electionId])
   @@index([entryType])
   @@index([timestamp])
   @@index([previousEntryHash])
+}
+
+// ============================================================================
+// BALLOT SUBMISSION PROTOCOL (see docs/protocol.md)
+// ============================================================================
+
+// A server-issued freshness challenge, bound into a token-validity ZK proof
+// at ballot-submission time (see docs/protocol.md, "Stage: Ballot
+// submission"). Consumed (marked used) on first successful use - reused or
+// unknown challenges are rejected, which is what makes the bound proof's
+// freshness guarantee actually enforced server-side rather than just
+// asserted by the proof format.
+model ChallengeNonce {
+  id         String    @id @default(uuid())
+  electionId String
+  challenge  String    @unique
+  issuedAt   DateTime  @default(now())
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+
+  @@index([electionId])
+  @@index([expiresAt])
+}
+
+// The signed, immutable finalization manifest for a closed election (see
+// docs/protocol.md, "Stage: Finalization"). Verification against a live,
+// mutable Election.merkleRoot column is not the same guarantee as
+// verification against this: a manifest, once created, is never updated,
+// and its manifestHash is signed at creation time.
+model ElectionFinalization {
+  id                    String   @id @default(uuid())
+  electionId            String   @unique
+
+  configurationHash     String
+  eligibilityRoot       String
+  finalBallotRoot       String
+  ledgerRoot             String?
+  ballotCount           Int
+  finalizationTimestamp DateTime @default(now())
+
+  manifestHash          String
+  signature             String
+  signerPublicKey       String
+
+  // Real external timestamp anchoring via OpenTimestamps
+  // (crypto.submitTimestampAnchor) - see docs/cryptography.md, "On the
+  // external timestamp anchor". No financial transaction, wallet, or
+  // token is involved. otsProof is the serialized .ots proof file;
+  // confirmation is asynchronous (typically hours), so otsConfirmed
+  // starts false and is only flipped true once
+  // crypto.checkTimestampAnchor() actually observes a completed
+  // attestation - never asserted eagerly.
+  otsProofBase64        String?
+  otsSubmittedAt        DateTime?
+  otsConfirmed          Boolean  @default(false)
+  otsCheckedAt          DateTime?
+
+  election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+
+  @@index([electionId])
+}
+
+// ============================================================================
+// ANONYMOUS ELIGIBILITY (see docs/protocol.md "Stage: Credential issuance",
+// backend/circuits/eligibility.circom, backend/src/crypto/eligibility.ts)
+// ============================================================================
+
+// A leaf in the election's eligibility Merkle tree: Poseidon(secret, salt)
+// for a voter enrolled during registration. The secret/salt never touch
+// the server - only the commitment does. Membership is proven anonymously
+// at vote time via eligibility.circom; revoked leaves are excluded from
+// tree reconstruction (see routes/eligibility.ts).
+model EligibilityCommitment {
+  id         String    @id @default(uuid())
+  electionId String
+  leafIndex  Int
+  commitment String    // Poseidon(secret, salt), decimal field element as string
+  revoked    Boolean   @default(false)
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+
+  @@unique([electionId, commitment])
+  @@unique([electionId, leafIndex])
+  @@index([electionId, revoked])
+}
+
+// A spent eligibility-proof nullifier (Poseidon(secret, electionId)).
+// Recording this - not any per-voter row - is what enforces one vote per
+// enrolled credential per election without the server ever learning which
+// enrolled voter cast which ballot.
+model Nullifier {
+  id         String   @id @default(uuid())
+  electionId String
+  nullifier  String
+  createdAt  DateTime @default(now())
+
+  election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+
+  @@unique([electionId, nullifier])
+  @@index([electionId])
+}
+
+// ============================================================================
+// CRYPTOGRAPHIC TALLY (see docs/protocol.md "Stage: Tally",
+// backend/src/crypto/tally.ts)
+// ============================================================================
+
+// One trustee's partial decryption of a candidate's homomorphically-summed
+// EC ElGamal ciphertext, plus a Chaum-Pedersen NIZK proof that the partial
+// decryption was computed correctly from that trustee's Shamir share -
+// anyone can verify the proof without learning the share or the tally
+// before enough trustees have contributed.
+model TrusteeDecryptionShare {
+  id                 String   @id @default(uuid())
+  electionId         String
+  candidateId        String
+  trusteeIndex       Int      // x-coordinate of this trustee's Shamir share
+  partialDecryption  String   // EC point (compressed hex)
+  proofCommitmentA   String   // Chaum-Pedersen proof component
+  proofCommitmentB   String
+  proofResponse      String
+  submittedAt        DateTime @default(now())
+
+  election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+
+  @@unique([electionId, candidateId, trusteeIndex])
+  @@index([electionId])
+}
+
+// ============================================================================
+// MULTI-PARTY ADMINISTRATION (Milestone 5, see docs/trust-model.md
+// "Election administrator" row and routes/election-approvals.ts)
+// ============================================================================
+
+// A proposed critical election lifecycle transition (CERTIFY, OPEN_VOTING,
+// FINALIZE, CANCEL) that requires signed sign-off from `threshold` distinct
+// org admins/officers before it executes - closes the "a compromised
+// ORG_ADMIN session can perform any administrative action unilaterally" gap
+// docs/trust-model.md calls out. The action only actually runs (status flips
+// to EXECUTED and the underlying election mutation happens) once enough
+// ElectionApprovalSignature rows exist; a proposal with too few approvals
+// stays PENDING forever and has no effect.
+model ElectionApproval {
+  id           String   @id @default(uuid())
+  electionId   String
+
+  action       String   // CERTIFY|OPEN_VOTING|FINALIZE|CANCEL
+  status       String   @default("PENDING") // PENDING|EXECUTED|FAILED|CANCELLED
+  threshold    Int      // Distinct approvers required (>= 2)
+  reason       String?
+
+  // What every approver actually signs - domainHash(ELECTION-ADMIN-ACTION,
+  // {electionId, action, reason, nonce}). Binding the nonce prevents a
+  // signature collected for one proposal from being replayable against a
+  // different proposal of the same action type.
+  nonce        String
+  proposalHash String
+
+  proposedBy   String   // User id
+  proposedByRole String
+  createdAt    DateTime @default(now())
+
+  executedAt   DateTime?
+  executedBy   String?  // User id of the approver whose signature crossed the threshold
+  executedResult String? // JSON snapshot of what happened (or the error, if FAILED)
+
+  election     Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  signatures   ElectionApprovalSignature[]
+
+  @@index([electionId])
+  @@index([electionId, action, status])
+  @@index([status])
+}
+
+// One distinct admin's cryptographic sign-off on a proposal. approverId is
+// unique per approval - the same admin cannot count twice toward the
+// threshold no matter how many times they call the approve endpoint.
+model ElectionApprovalSignature {
+  id              String   @id @default(uuid())
+  approvalId      String
+
+  approverId      String   // User id
+  approverRole    String
+  signerPublicKey String
+  signature       String   // Ed25519 signature over the approval's proposalHash
+
+  approvedAt      DateTime @default(now())
+
+  approval        ElectionApproval @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+
+  @@unique([approvalId, approverId])
+  @@index([approvalId])
 }
 
 // ============================================================================

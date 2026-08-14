@@ -6,10 +6,9 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../db';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // GET /api/election-data/national - National summary
 router.get('/national', async (_req: Request, res: Response) => {

@@ -5,6 +5,7 @@
 
 import request from 'supertest';
 import express from 'express';
+import { MerkleTree } from '../../crypto/engine';
 
 // Create mock functions
 const mockVoteFindMany = jest.fn();
@@ -12,6 +13,7 @@ const mockVoteFindFirst = jest.fn();
 const mockVoteCount = jest.fn();
 const mockElectionFindUnique = jest.fn();
 const mockTallyResultFindMany = jest.fn();
+const mockElectionFinalizationFindUnique = jest.fn();
 
 // Mock Prisma before importing routes
 jest.mock('@prisma/client', () => ({
@@ -26,6 +28,9 @@ jest.mock('@prisma/client', () => ({
     },
     tallyResult: {
       findMany: mockTallyResultFindMany,
+    },
+    electionFinalization: {
+      findUnique: mockElectionFinalizationFindUnique,
     },
   })),
 }));
@@ -259,15 +264,31 @@ describe('Election Player Routes', () => {
       expect(response.body.error).toBe('Vote not found');
     });
 
+    // verify-vote now recomputes a real Merkle proof from the current vote
+    // set (see routes/election-player.ts) rather than comparing two stored
+    // root columns, so these fixtures need a real, internally-consistent
+    // set of votes/roots for MerkleTree to work with - not placeholder
+    // strings like 'matching-root' that were never actually hashed.
     it('should verify valid vote', async () => {
+      const votes = [
+        { id: 'v1', encryptedVote: 'ciphertext-1' },
+        { id: 'v2', encryptedVote: 'ciphertext-2' },
+        { id: 'v3', encryptedVote: 'ciphertext-3' },
+      ];
+      const tree = new MerkleTree(votes.map(v => v.encryptedVote));
+      const realRoot = tree.getRoot();
+
       mockVoteFindFirst.mockResolvedValue({
+        id: 'v2',
         receiptHash: 'valid-receipt',
-        merkleRoot: 'matching-root',
-        merkleProof: 'proof-data',
+        merkleRoot: realRoot,
+        merkleProof: 'unused-stale-proof',
         ledgerTimestamp: new Date(),
         candidate: { name: 'John Doe' },
-        election: { merkleRoot: 'matching-root' },
+        election: { merkleRoot: realRoot },
       });
+      mockVoteFindMany.mockResolvedValue(votes);
+      mockElectionFinalizationFindUnique.mockResolvedValue(null); // not finalized - checked against live root
 
       const response = await request(app)
         .post('/api/election-player/election1/verify-vote')
@@ -280,14 +301,25 @@ describe('Election Player Routes', () => {
     });
 
     it('should fail verification for mismatched merkle root', async () => {
+      const votes = [
+        { id: 'v1', encryptedVote: 'ciphertext-1' },
+        { id: 'v2', encryptedVote: 'ciphertext-2' },
+      ];
+
       mockVoteFindFirst.mockResolvedValue({
+        id: 'v2',
         receiptHash: 'receipt',
-        merkleRoot: 'old-root',
-        merkleProof: 'proof-data',
+        merkleRoot: 'stale-root-from-before-a-later-vote-was-added',
+        merkleProof: 'unused-stale-proof',
         ledgerTimestamp: new Date(),
         candidate: { name: 'Jane Smith' },
-        election: { merkleRoot: 'new-root' },
+        // Election's live root doesn't match what a real recomputation
+        // over `votes` would produce - e.g. the DB column was tampered
+        // with, or is simply stale relative to the real ledger.
+        election: { merkleRoot: 'a-root-that-does-not-match-real-recomputation' },
       });
+      mockVoteFindMany.mockResolvedValue(votes);
+      mockElectionFinalizationFindUnique.mockResolvedValue(null);
 
       const response = await request(app)
         .post('/api/election-player/election1/verify-vote')

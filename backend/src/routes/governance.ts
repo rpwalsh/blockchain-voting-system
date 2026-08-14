@@ -17,6 +17,7 @@ import { Issuer, generators } from 'openid-client';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { prisma } from '../db';
 import crypto from '../crypto/engine';
+import { domainHash, DOMAIN } from '../crypto/canonical';
 import { requireAuth, requireOrgRole, requireSuperAdmin, AuthedRequest } from '../middleware/auth';
 import { loadConfig } from '../config';
 
@@ -682,9 +683,10 @@ router.post('/elections', requireAuth, requireOrgRole(['ORG_ADMIN', 'ELECTION_OF
     const eligible = allMembers.filter((m: any) => evaluateEligibility(m, expr));
     const eligibleExternalIds = eligible.map((m: any) => m.externalId).sort();
 
-    const snapshotHash = crypto.hashVotingToken(
-      JSON.stringify({ rule: rule ? { id: rule.id, expression: rule.expression } : null, members: eligibleExternalIds })
-    );
+    const snapshotHash = domainHash(DOMAIN.ELECTION_ELIGIBILITY, {
+      rule: rule ? { id: rule.id, expression: rule.expression } : null,
+      members: eligibleExternalIds,
+    });
 
     const report = {
       generatedAt: new Date().toISOString(),
@@ -696,6 +698,9 @@ router.post('/elections', requireAuth, requireOrgRole(['ORG_ADMIN', 'ELECTION_OF
         return acc;
       }, {}),
     };
+
+    const signingKeyPair = crypto.generateKeyPair();
+    const keyShares = crypto.splitSecretShamir(electionKeyPair.privateKey, 3, 5);
 
     const created = await prisma.$transaction(async tx => {
       const election = await tx.election.create({
@@ -711,6 +716,9 @@ router.post('/elections', requireAuth, requireOrgRole(['ORG_ADMIN', 'ELECTION_OF
           publicKey: electionKeyPair.publicKey,
           privateKeyHash: crypto.hashVotingToken(electionKeyPair.privateKey),
           privateKey: electionKeyPair.privateKey,
+          keyShares: JSON.stringify(keyShares),
+          signingPublicKey: signingKeyPair.publicKey,
+          signingPrivateKey: signingKeyPair.privateKey,
         },
       });
 
@@ -894,7 +902,7 @@ router.get('/elections/:electionId/proof-pack', requireAuth, requireOrgRole(['OR
         })),
       },
       integrity: {
-        packHash: crypto.hashVotingToken(JSON.stringify({ orgId, electionId: election.id, snapshot: snapshot?.snapshotHash || null, votes: votes.map(v => v.ledgerEntryHash) })),
+        packHash: domainHash(DOMAIN.ELECTION_LEDGER, { orgId, electionId: election.id, snapshot: snapshot?.snapshotHash || null, votes: votes.map(v => v.ledgerEntryHash) }),
         signature: null,
         signatureAlgorithm: null,
         note: 'Set PROOF_PACK_SIGNING_PRIVATE_KEY to enable signatures',

@@ -70,9 +70,11 @@ describe('Error Handler Middleware', () => {
       );
 
       expect(mockResponse.status).toHaveBeenCalledWith(404);
+      // errorHandler returns {success, error} - every route in this app
+      // uses that shape.
       expect(mockResponse.json).toHaveBeenCalledWith({
-        status: 'error',
-        message: 'Resource not found',
+        success: false,
+        error: 'Resource not found',
       });
     });
 
@@ -102,9 +104,13 @@ describe('Error Handler Middleware', () => {
       );
 
       expect(mockResponse.status).toHaveBeenCalledWith(500);
+      // Outside production, the real message is passed through rather than
+      // genericized (see errorHandler.ts: `process.env.NODE_ENV === 'production'
+      // ? 'Internal server error' : err.message`) - useful for debugging,
+      // and this test runs with NODE_ENV=test.
       expect(mockResponse.json).toHaveBeenCalledWith({
-        status: 'error',
-        message: 'Internal server error',
+        success: false,
+        error: 'Unknown database error',
       });
     });
 

@@ -94,7 +94,6 @@ describe('Crypto Audit Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(response.body.system).toContain('Trustless Voting');
       expect(response.body.capabilities).toBeDefined();
       expect(response.body.capabilities.encryption).toBeDefined();
       expect(response.body.capabilities.signatures).toBeDefined();
@@ -102,21 +101,26 @@ describe('Crypto Audit Routes', () => {
       expect(response.body.capabilities.thresholdCrypto).toBeDefined();
     });
 
-    it('should compare with competitors', async () => {
+    // The competitor-disparagement "comparison" block (vs. Smartmatic) and
+    // the unfounded "compliance" list (FIPS/Common Criteria/SOC 2/ISO 27001
+    // with no actual audit behind any of them) have been removed from this
+    // endpoint - see docs/cryptography.md for the correction. These tests
+    // now check that each primitive honestly reports real vs. fallback
+    // status instead of asserting marketing content that shouldn't exist.
+    it('should report real vs. fallback status per zero-knowledge primitive', async () => {
       const response = await request(app)
         .get('/api/crypto-audit/capabilities');
 
-      expect(response.body.comparison).toBeDefined();
-      expect(response.body.comparison.smartmatic).toBeDefined();
-      expect(response.body.comparison.trustlessVoting).toBeDefined();
+      expect(response.body.capabilities.zeroKnowledge.tokenValidity.status).toMatch(/real/i);
+      expect(response.body.capabilities.zeroKnowledge.voteValidity.status).toMatch(/not implemented/i);
     });
 
-    it('should list compliance standards', async () => {
+    it('should not claim any compliance certification', async () => {
       const response = await request(app)
         .get('/api/crypto-audit/capabilities');
 
-      expect(response.body.compliance).toBeInstanceOf(Array);
-      expect(response.body.compliance.length).toBeGreaterThan(0);
+      expect(response.body.compliance).toBeUndefined();
+      expect(response.body.comparison).toBeUndefined();
     });
   });
 
@@ -379,13 +383,13 @@ describe('Crypto Audit Routes', () => {
       expect(ed25519.type).toBe('Digital Signature');
     });
 
-    it('should include compliance information', async () => {
+    it('should not claim FIPS/compliance certification, and should point to the real correction', async () => {
       const response = await request(app)
         .get('/api/crypto-audit/algorithms');
 
-      expect(response.body.compliance).toBeDefined();
-      expect(response.body.compliance.nist).toBeDefined();
-      expect(response.body.compliance.fips).toBeDefined();
+      // See docs/cryptography.md.
+      expect(response.body.compliance).toBeUndefined();
+      expect(response.body.note).toMatch(/not.*(FIPS|certification)/i);
     });
   });
 

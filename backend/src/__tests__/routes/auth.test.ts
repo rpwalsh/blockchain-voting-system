@@ -17,6 +17,7 @@ jest.mock('@prisma/client', () => {
       create: jest.fn(),
     },
     organization: {
+      findUnique: jest.fn(),
       findFirst: jest.fn(),
       create: jest.fn(),
     },
@@ -72,7 +73,7 @@ describe('Auth Routes', () => {
       };
 
       (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
-      (prisma.organization.findFirst as jest.Mock).mockResolvedValue(mockOrg);
+      (prisma.organization.findUnique as jest.Mock).mockResolvedValue(mockOrg);
       (prisma.user.create as jest.Mock).mockResolvedValue(mockUser);
 
       const response = await request(app)
@@ -104,7 +105,8 @@ describe('Auth Routes', () => {
     });
 
     it('should return 409 when email already exists', async () => {
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue({ id: 'existing' });
+      (prisma.organization.findUnique as jest.Mock).mockResolvedValue({ id: 'org-1' });
+      (prisma.user.findFirst as jest.Mock).mockResolvedValue({ id: 'existing' });
 
       const response = await request(app)
         .post('/api/auth/register')
@@ -118,7 +120,8 @@ describe('Auth Routes', () => {
       const mockUser = { id: 'user-1', ...validRegistration, role: 'VOTER' };
 
       (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
-      (prisma.organization.findFirst as jest.Mock).mockResolvedValue(null);
+      (prisma.user.findFirst as jest.Mock).mockResolvedValue(null);
+      (prisma.organization.findUnique as jest.Mock).mockResolvedValue(null);
       (prisma.organization.create as jest.Mock).mockResolvedValue({ id: 'new-org' });
       (prisma.user.create as jest.Mock).mockResolvedValue(mockUser);
 
@@ -131,7 +134,7 @@ describe('Auth Routes', () => {
     });
 
     it('should handle database errors gracefully', async () => {
-      (prisma.user.findUnique as jest.Mock).mockRejectedValue(new Error('DB Error'));
+      (prisma.organization.findUnique as jest.Mock).mockRejectedValue(new Error('DB Error'));
 
       const response = await request(app)
         .post('/api/auth/register')
@@ -157,6 +160,7 @@ describe('Auth Routes', () => {
         organization: { id: 'org-1', name: 'Test Org', slug: 'test-org' },
       };
 
+      (prisma.organization.findUnique as jest.Mock).mockResolvedValue({ id: 'org-1', name: 'Test Org', slug: 'test-org' });
       (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
@@ -182,6 +186,7 @@ describe('Auth Routes', () => {
         organization: { id: 'org-1', name: 'Test Org', slug: 'test-org' },
       };
 
+      (prisma.organization.findUnique as jest.Mock).mockResolvedValue({ id: 'org-1', name: 'Test Org', slug: 'test-org' });
       (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
       (prisma.user.findFirst as jest.Mock).mockResolvedValue(mockUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
@@ -211,28 +216,44 @@ describe('Auth Routes', () => {
       };
 
       (prisma.superAdmin.findUnique as jest.Mock).mockResolvedValue(mockSuperAdmin);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
       const response = await request(app)
         .post('/api/auth/login')
-        .send({ email: 'admin', password: 'admin' });
+        .send({ email: 'admin', password: 'correct-password' });
 
       expect(response.status).toBe(200);
       expect(response.body.user.role).toBe('SUPER_ADMIN');
     });
 
-    it('should create super admin if not exists', async () => {
-      (prisma.superAdmin.findUnique as jest.Mock).mockResolvedValue(null);
-      (prisma.superAdmin.create as jest.Mock).mockResolvedValue({
+    it('should reject super admin login with wrong password', async () => {
+      (prisma.superAdmin.findUnique as jest.Mock).mockResolvedValue({
         id: 'super-1',
         username: 'admin',
+        passwordHash: 'hashed',
       });
+      (bcrypt.compare as jest.Mock).mockResolvedValue(false);
+
+      const response = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'admin', password: 'wrong' });
+
+      expect(response.status).toBe(401);
+      expect(prisma.superAdmin.create).not.toHaveBeenCalled();
+    });
+
+    it('should not auto-create a super admin account on login', async () => {
+      (prisma.superAdmin.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.organization.findUnique as jest.Mock).mockResolvedValue({ id: 'org-1', name: 'Public Organization', slug: 'public-org' });
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.user.findFirst as jest.Mock).mockResolvedValue(null);
 
       const response = await request(app)
         .post('/api/auth/login')
         .send({ email: 'admin', password: 'admin' });
 
-      expect(response.status).toBe(200);
-      expect(prisma.superAdmin.create).toHaveBeenCalled();
+      expect(response.status).toBe(401);
+      expect(prisma.superAdmin.create).not.toHaveBeenCalled();
     });
 
     it('should return 401 for invalid credentials', async () => {
