@@ -39,6 +39,7 @@ import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import SecurityIcon from '@mui/icons-material/Security';
+import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 import Home from './pages/Home';
 import Elections from './pages/Elections';
 import Vote from './pages/Vote';
@@ -54,10 +55,12 @@ import Register from './pages/Register';
 import SuperAdmin from './pages/SuperAdmin';
 import AdminDebug from './pages/AdminDebug';
 import AdminConfig from './pages/AdminConfig';
+import IntegrityDashboard from './pages/IntegrityDashboard';
 import BlockchainVotingSystem from './pages/BlockchainVotingSystem';
 import GovernanceVerify from './pages/GovernanceVerify';
 import SSOCallback from './pages/SSOCallback';
 import ElectionPlayer from './components/ElectionPlayer/ElectionPlayer';
+import { gradients } from './theme/muiTheme';
 
 function PlayerWrapper() {
   const { electionId } = useParams();
@@ -79,7 +82,8 @@ const navItems: NavItem[] = [
   { label: 'Whitepaper', path: '/whitepaper', icon: <MenuBookIcon /> },
   { label: 'Elections', path: '/elections', icon: <HowToVoteIcon /> },
   { label: 'Verify', path: '/verify', icon: <VerifiedIcon /> },
-  { label: 'blockchain-voting-system', path: '/governance', icon: <SecurityIcon />, highlight: true },
+  { label: 'Integrity Dashboard', path: '/admin/integrity', icon: <MonitorHeartIcon />, highlight: true },
+  { label: 'Governance', path: '/governance', icon: <SecurityIcon /> },
 ];
 
 const authItems: NavItem[] = [
@@ -104,18 +108,18 @@ function App() {
       <Box
         sx={{
           p: 2,
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          background: gradients.primary,
           color: 'white',
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <SecurityIcon />
           <Typography variant="h6" fontWeight="bold">
-            blockchain-voting-system
+            Verity
           </Typography>
         </Box>
         <Typography variant="caption" sx={{ opacity: 0.8 }}>
-          Cryptographic Election Integrity
+          Cryptographic Election Infrastructure
         </Typography>
       </Box>
       <Divider />
@@ -212,7 +216,7 @@ function App() {
               <SecurityIcon
                 sx={{
                   fontSize: 32,
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  background: gradients.primary,
                   WebkitBackgroundClip: 'text',
                   WebkitTextFillColor: 'transparent',
                   backgroundClip: 'text',
@@ -222,19 +226,19 @@ function App() {
                 variant="h6"
                 fontWeight="bold"
                 sx={{
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  background: gradients.primary,
                   WebkitBackgroundClip: 'text',
                   WebkitTextFillColor: 'transparent',
                   backgroundClip: 'text',
                   display: { xs: 'none', sm: 'block' },
                 }}
               >
-                blockchain-voting-system
+                Verity
               </Typography>
             </Box>
 
             {!isMobile && (
-              <Box sx={{ display: 'flex', gap: 0.5, ml: 2, flexGrow: 1 }}>
+              <Box component="nav" aria-label="Main navigation" sx={{ display: 'flex', gap: 0.5, ml: 2, flexGrow: 1 }}>
                 {navItems.map((item) => (
                   <Button
                     key={item.path}
@@ -283,9 +287,6 @@ function App() {
                     to="/register"
                     variant="contained"
                     size="small"
-                    sx={{
-                      background: 'linear-gradient(45deg, #667eea 30%, #764ba2 90%)',
-                    }}
                   >
                     Register
                   </Button>
@@ -342,6 +343,8 @@ function App() {
           <Route path="/admin/debug" element={<AdminDebug />} />
           <Route path="/admin/config" element={<AdminConfig />} />
           <Route path="/admin/dashboard" element={<SuperAdmin />} />
+          <Route path="/admin/integrity" element={<IntegrityDashboard />} />
+          <Route path="/admin/integrity/:electionId" element={<IntegrityDashboard />} />
           <Route path="/player/:electionId" element={<PlayerWrapper />} />
         </Routes>
       </Box>

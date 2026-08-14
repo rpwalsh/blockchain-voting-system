@@ -42,8 +42,8 @@ describe('App Component', () => {
       expect(screen.getByRole('link', { name: /home/i })).toBeInTheDocument();
       // Elections link appears in both nav and possibly home page
       expect(screen.getAllByRole('link', { name: /elections/i }).length).toBeGreaterThan(0);
-      // Verify vote may also have multiple links
-      expect(screen.getAllByRole('link', { name: /verify vote/i }).length).toBeGreaterThan(0);
+      // Verify appears in the nav and (as "Verify Your Vote"/"Verify a vote") on the home page
+      expect(screen.getAllByRole('link', { name: /verify/i }).length).toBeGreaterThan(0);
       // Public audit may have multiple links
       expect(screen.getAllByRole('link', { name: /public audit/i }).length).toBeGreaterThan(0);
       expect(screen.getByRole('link', { name: /login/i })).toBeInTheDocument();
@@ -52,7 +52,7 @@ describe('App Component', () => {
     it('renders brand/logo link', () => {
       render(<App />, { wrapper: BrowserRouter });
       
-      const brandLink = screen.getByRole('link', { name: /trustless voting/i });
+      const brandLink = screen.getByRole('link', { name: /verity/i });
       expect(brandLink).toBeInTheDocument();
       expect(brandLink).toHaveAttribute('href', '/');
     });
@@ -64,7 +64,7 @@ describe('App Component', () => {
         </MemoryRouter>
       );
       
-      expect(screen.getByText(/trustless voting system/i)).toBeInTheDocument();
+      expect(screen.getByText(/elections that prove themselves/i)).toBeInTheDocument();
     });
 
     it('navigates to elections page', async () => {
@@ -79,7 +79,7 @@ describe('App Component', () => {
       const user = userEvent.setup();
       render(<App />, { wrapper: BrowserRouter });
       
-      await user.click(screen.getByRole('link', { name: /verify vote/i }));
+      await user.click(screen.getByRole('link', { name: /^verify$/i }));
       expect(window.location.pathname).toBe('/verify');
     });
 
@@ -108,7 +108,7 @@ describe('App Component', () => {
         </MemoryRouter>
       );
       
-      expect(screen.getByText(/trustless voting system/i)).toBeInTheDocument();
+      expect(screen.getByText(/elections that prove themselves/i)).toBeInTheDocument();
     });
 
     it('renders Elections page for "/elections" route', async () => {

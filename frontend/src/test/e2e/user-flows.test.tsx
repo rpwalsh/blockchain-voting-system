@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../../App';
-import { electionService, voterService, auditService } from '../../services/api';
+import { electionService, auditService, electionPlayerService } from '../../services/api';
 import api from '../../services/api';
 
 // Mock the api module
@@ -22,6 +22,18 @@ vi.mock('../../services/api', () => ({
   auditService: {
     getElectionIntegrity: vi.fn(),
     getStatistics: vi.fn(),
+  },
+  electionPlayerService: {
+    verifyVote: vi.fn(),
+    getTimeline: vi.fn(),
+    getStats: vi.fn(),
+  },
+  cryptoAuditService: {
+    getMerkleTree: vi.fn().mockResolvedValue({ merkleTree: null }),
+  },
+  governanceService: {
+    listPublicElections: vi.fn(),
+    listElections: vi.fn().mockRejectedValue(new Error('unauthenticated')),
   },
 }));
 
@@ -56,7 +68,7 @@ describe('E2E User Flows', () => {
       renderApp();
 
       // Start on home page
-      expect(screen.getByText(/trustless voting system/i)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: /elections that prove themselves/i })).toBeInTheDocument();
 
       // Click on Elections link (nav link specifically)
       const navElections = screen.getAllByRole('link', { name: /elections/i })[0];
@@ -73,7 +85,7 @@ describe('E2E User Flows', () => {
       renderApp();
 
       // Use getAllBy since there may be multiple links
-      await user.click(screen.getAllByRole('link', { name: /verify vote/i })[0]);
+      await user.click(screen.getAllByRole('link', { name: /verify your vote/i })[0]);
 
       expect(screen.getByRole('heading', { name: /verify your vote/i })).toBeInTheDocument();
     });
@@ -95,55 +107,63 @@ describe('E2E User Flows', () => {
       renderApp();
 
       // Navigate away from home
-      await user.click(screen.getAllByRole('link', { name: /verify vote/i })[0]);
+      await user.click(screen.getAllByRole('link', { name: /verify your vote/i })[0]);
       expect(screen.getByRole('heading', { name: /verify your vote/i })).toBeInTheDocument();
 
       // Navigate back to home using logo
-      await user.click(screen.getByRole('link', { name: /trustless voting/i }));
-      expect(screen.getByText(/trustless voting system/i)).toBeInTheDocument();
+      await user.click(screen.getByRole('link', { name: /verity/i }));
+      expect(screen.getByRole('heading', { level: 1, name: /elections that prove themselves/i })).toBeInTheDocument();
     });
   });
 
   describe('Vote Verification Flow', () => {
     it('user can verify their vote', async () => {
       const user = userEvent.setup();
-      
-      // Simplified test - verify the page loads and form works
+      vi.mocked(electionPlayerService.verifyVote).mockResolvedValue({
+        success: true,
+        verified: true,
+        checkedAgainst: 'signed final root',
+        vote: {
+          receiptHash: 'my-receipt-hash',
+          timestamp: new Date().toISOString(),
+          merkleProof: { root: 'root', leaf: 'leaf', index: 0, algorithm: 'SHA3-256', siblings: [] },
+        },
+      });
+
       renderApp('/verify');
 
-      // Wait for page to load
       await waitFor(() => {
         expect(screen.getByRole('heading', { name: /verify your vote/i })).toBeInTheDocument();
       });
-      
-      // Form is present
-      expect(screen.getByPlaceholderText(/enter your receipt hash/i)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /verify vote/i })).toBeInTheDocument();
-      
-      // Enter receipt hash
-      await user.type(screen.getByPlaceholderText(/enter your receipt hash/i), 'my-receipt-hash');
-      
-      // Button should be enabled
-      expect(screen.getByRole('button', { name: /verify vote/i })).not.toBeDisabled();
+
+      await user.type(screen.getByLabelText(/election id/i), 'election-1');
+      await user.type(screen.getByLabelText(/receipt hash/i), 'my-receipt-hash');
+      await user.click(screen.getByRole('button', { name: /^verify$/i }));
+
+      await waitFor(() => {
+        expect(electionPlayerService.verifyVote).toHaveBeenCalledWith('election-1', 'my-receipt-hash');
+      });
+      expect(await screen.findByText(/proof checks out/i)).toBeInTheDocument();
     });
 
     it('user sees error for invalid receipt', async () => {
       const user = userEvent.setup();
-      vi.mocked(voterService.verifyVote).mockRejectedValue({
-        response: { data: { message: 'Receipt not found' } },
+      vi.mocked(electionPlayerService.verifyVote).mockRejectedValue({
+        response: { status: 404, data: { error: 'Vote not found' } },
       });
 
       renderApp('/verify');
-      
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText(/enter your receipt hash/i)).toBeInTheDocument();
-      });
-      
-      await user.type(screen.getByPlaceholderText(/enter your receipt hash/i), 'invalid-receipt');
-      await user.click(screen.getByRole('button', { name: /verify vote/i }));
 
       await waitFor(() => {
-        expect(screen.getByText(/receipt not found/i)).toBeInTheDocument();
+        expect(screen.getByLabelText(/election id/i)).toBeInTheDocument();
+      });
+
+      await user.type(screen.getByLabelText(/election id/i), 'election-1');
+      await user.type(screen.getByLabelText(/receipt hash/i), 'invalid-receipt');
+      await user.click(screen.getByRole('button', { name: /^verify$/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/no ballot was found/i)).toBeInTheDocument();
       });
     });
   });
@@ -282,8 +302,8 @@ describe('E2E User Flows', () => {
       expect(screen.getByRole('link', { name: /home/i })).toBeInTheDocument();
       // Elections link appears in both nav and home page
       expect(screen.getAllByRole('link', { name: /elections/i }).length).toBeGreaterThan(0);
-      // Verify Vote appears in nav and home page
-      expect(screen.getAllByRole('link', { name: /verify vote/i }).length).toBeGreaterThan(0);
+      // Verify Your Vote appears in nav and home page
+      expect(screen.getAllByRole('link', { name: /verify your vote/i }).length).toBeGreaterThan(0);
       // Public Audit appears in nav and home page
       expect(screen.getAllByRole('link', { name: /public audit/i }).length).toBeGreaterThan(0);
       expect(screen.getByRole('link', { name: /login/i })).toBeInTheDocument();

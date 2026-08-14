@@ -3,12 +3,18 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import Verify from '../../pages/Verify';
-import { voterService } from '../../services/api';
+import { cryptoAuditService, electionPlayerService } from '../../services/api';
 
 // Mock the api module
 vi.mock('../../services/api', () => ({
-  voterService: {
+  electionPlayerService: {
     verifyVote: vi.fn(),
+  },
+  cryptoAuditService: {
+    getMerkleTree: vi.fn().mockResolvedValue({ merkleTree: null }),
+  },
+  governanceService: {
+    listPublicElections: vi.fn(),
   },
 }));
 
@@ -16,215 +22,201 @@ const renderWithRouter = (component: React.ReactNode) => {
   return render(<BrowserRouter>{component}</BrowserRouter>);
 };
 
+const fillAndSubmit = async (user: ReturnType<typeof userEvent.setup>, electionId = 'election-1', receiptHash = 'receipt-hash-abc') => {
+  await user.type(screen.getByLabelText(/election id/i), electionId);
+  await user.type(screen.getByLabelText(/receipt hash/i), receiptHash);
+  await user.click(screen.getByRole('button', { name: /^verify$/i }));
+};
+
+const mockMerkleProof = {
+  root: 'root-hash-0123456789abcdef',
+  leaf: 'leaf-hash-0123456789abcdef',
+  index: 2,
+  algorithm: 'SHA3-256, domain-separated',
+  siblings: [
+    { left: false, hash: 'sibling-level-1-hash' },
+    { left: true, hash: 'sibling-level-2-hash' },
+  ],
+};
+
 describe('Verify Page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(cryptoAuditService.getMerkleTree).mockResolvedValue({ merkleTree: null });
   });
 
   describe('Rendering', () => {
     it('renders page heading', () => {
       renderWithRouter(<Verify />);
-      
+
       expect(screen.getByRole('heading', { name: /verify your vote/i })).toBeInTheDocument();
     });
 
-    it('renders description text', () => {
+    it('renders election ID and receipt hash inputs', () => {
       renderWithRouter(<Verify />);
-      
-      expect(screen.getByText(/enter your receipt hash to verify/i)).toBeInTheDocument();
-    });
 
-    it('renders receipt hash input', () => {
-      renderWithRouter(<Verify />);
-      
-      expect(screen.getByPlaceholderText(/enter your receipt hash/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/election id/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/receipt hash/i)).toBeInTheDocument();
     });
 
     it('renders verify button', () => {
       renderWithRouter(<Verify />);
-      
-      expect(screen.getByRole('button', { name: /verify vote/i })).toBeInTheDocument();
+
+      expect(screen.getByRole('button', { name: /^verify$/i })).toBeInTheDocument();
     });
 
-    it('renders "How Verification Works" section', () => {
+    it('renders "How verification works" section', () => {
       renderWithRouter(<Verify />);
-      
+
       expect(screen.getByRole('heading', { name: /how verification works/i })).toBeInTheDocument();
     });
 
-    it('renders explanation list items', () => {
+    it('renders the organization lookup helper', () => {
       renderWithRouter(<Verify />);
-      
-      expect(screen.getByText(/receipt hash links to a specific entry/i)).toBeInTheDocument();
-      expect(screen.getByText(/merkle proof for independent verification/i)).toBeInTheDocument();
-      expect(screen.getByText(/vote content remains encrypted/i)).toBeInTheDocument();
+
+      expect(screen.getByText(/don't know your election id/i)).toBeInTheDocument();
     });
   });
 
   describe('Form Validation', () => {
-    it('receipt hash input is required', async () => {
+    it('shows a validation message when submitted empty', async () => {
+      const user = userEvent.setup();
       renderWithRouter(<Verify />);
 
-      const input = screen.getByPlaceholderText(/enter your receipt hash/i);
-      expect(input).toBeRequired();
-    });
+      await user.click(screen.getByRole('button', { name: /^verify$/i }));
 
-    it('receipt hash input has monospace font', () => {
-      renderWithRouter(<Verify />);
-      
-      const input = screen.getByPlaceholderText(/enter your receipt hash/i);
-      expect(input).toHaveStyle({ fontFamily: 'monospace' });
+      expect(await screen.findByText(/enter both the election id and your receipt hash/i)).toBeInTheDocument();
+      expect(electionPlayerService.verifyVote).not.toHaveBeenCalled();
     });
   });
 
   describe('Verification Flow', () => {
-    it('calls verifyVote with receipt hash', async () => {
+    it('calls verifyVote with election ID and receipt hash', async () => {
       const user = userEvent.setup();
-      vi.mocked(voterService.verifyVote).mockResolvedValueOnce({
+      vi.mocked(electionPlayerService.verifyVote).mockResolvedValueOnce({
+        success: true,
         verified: true,
-        message: 'Vote verified successfully',
+        checkedAgainst: 'signed final root',
         vote: {
-          ledgerEntryHash: 'abc123',
-          merkleRoot: 'merkle456',
+          receiptHash: 'receipt-hash-abc',
+          candidateName: 'Should never be rendered',
           timestamp: new Date().toISOString(),
-          election: { name: 'Test Election', status: 'VOTING' },
+          merkleProof: mockMerkleProof,
         },
       });
 
       renderWithRouter(<Verify />);
-
-      await user.type(screen.getByPlaceholderText(/enter your receipt hash/i), 'my-receipt-hash-123');
-      await user.click(screen.getByRole('button', { name: /verify vote/i }));
+      await fillAndSubmit(user);
 
       await waitFor(() => {
-        expect(voterService.verifyVote).toHaveBeenCalledWith('my-receipt-hash-123');
+        expect(electionPlayerService.verifyVote).toHaveBeenCalledWith('election-1', 'receipt-hash-abc');
       });
     });
 
-    it('displays success message on verified vote', async () => {
+    it('shows a success banner and the Merkle proof steps when verified', async () => {
       const user = userEvent.setup();
-      vi.mocked(voterService.verifyVote).mockResolvedValueOnce({
+      vi.mocked(electionPlayerService.verifyVote).mockResolvedValueOnce({
+        success: true,
         verified: true,
-        message: 'Your vote was successfully recorded and verified',
+        checkedAgainst: 'signed final root',
         vote: {
-          ledgerEntryHash: 'ledger-hash-abc',
-          merkleRoot: 'merkle-root-xyz',
-          timestamp: '2024-01-15T10:30:00Z',
-          election: { name: 'Presidential Election 2024', status: 'VOTING' },
+          receiptHash: 'receipt-hash-abc',
+          candidateName: 'Should never be rendered',
+          timestamp: new Date().toISOString(),
+          merkleProof: mockMerkleProof,
         },
       });
 
       renderWithRouter(<Verify />);
+      await fillAndSubmit(user);
 
-      await user.type(screen.getByPlaceholderText(/enter your receipt hash/i), 'valid-receipt');
-      await user.click(screen.getByRole('button', { name: /verify vote/i }));
-
-      await waitFor(() => {
-        expect(voterService.verifyVote).toHaveBeenCalled();
-      });
+      expect(await screen.findByText(/proof checks out/i)).toBeInTheDocument();
+      expect(screen.getByText(/ballot located/i)).toBeInTheDocument();
+      expect(screen.getByText(/leaf hash computed/i)).toBeInTheDocument();
+      expect(screen.getByText(/compared to the election's merkle root/i)).toBeInTheDocument();
+      // One step per sibling in the real proof
+      expect(screen.getByText(/combine at level 1 of 2/i)).toBeInTheDocument();
+      expect(screen.getByText(/combine at level 2 of 2/i)).toBeInTheDocument();
     });
 
-    it('displays verification details', async () => {
+    it('never renders the candidate name, even though the API returns one', async () => {
       const user = userEvent.setup();
-      vi.mocked(voterService.verifyVote).mockResolvedValueOnce({
+      vi.mocked(electionPlayerService.verifyVote).mockResolvedValueOnce({
+        success: true,
         verified: true,
-        message: 'Vote verified',
+        checkedAgainst: 'signed final root',
         vote: {
-          ledgerEntryHash: 'ledger-hash-abc',
-          merkleRoot: 'merkle-root-xyz',
-          timestamp: '2024-01-15T10:30:00Z',
-          election: { name: 'Presidential Election 2024', status: 'VOTING' },
+          receiptHash: 'receipt-hash-abc',
+          candidateName: 'Definitely Secret Candidate',
+          timestamp: new Date().toISOString(),
+          merkleProof: mockMerkleProof,
         },
       });
 
       renderWithRouter(<Verify />);
+      await fillAndSubmit(user);
 
-      await user.type(screen.getByPlaceholderText(/enter your receipt hash/i), 'valid-receipt');
-      await user.click(screen.getByRole('button', { name: /verify vote/i }));
-
-      await waitFor(() => {
-        expect(voterService.verifyVote).toHaveBeenCalled();
-      });
+      await screen.findByText(/proof checks out/i);
+      expect(screen.queryByText(/definitely secret candidate/i)).not.toBeInTheDocument();
     });
 
-    it('displays failure message on unverified vote', async () => {
+    it('shows a failure banner when the proof does not verify', async () => {
       const user = userEvent.setup();
-      vi.mocked(voterService.verifyVote).mockResolvedValueOnce({
+      vi.mocked(electionPlayerService.verifyVote).mockResolvedValueOnce({
+        success: true,
         verified: false,
-        message: 'Vote not found in ledger',
+        checkedAgainst: 'live election.merkleRoot (not yet finalized)',
         vote: {
-          ledgerEntryHash: 'invalid',
-          merkleRoot: 'invalid',
-          timestamp: '2024-01-15T10:30:00Z',
-          election: { name: 'Unknown', status: 'UNKNOWN' },
+          receiptHash: 'receipt-hash-abc',
+          timestamp: new Date().toISOString(),
+          merkleProof: mockMerkleProof,
         },
       });
 
       renderWithRouter(<Verify />);
+      await fillAndSubmit(user);
 
-      await user.type(screen.getByPlaceholderText(/enter your receipt hash/i), 'invalid-receipt');
-      await user.click(screen.getByRole('button', { name: /verify vote/i }));
-
-      await waitFor(() => {
-        expect(voterService.verifyVote).toHaveBeenCalled();
-      });
+      expect(await screen.findByText(/could not be verified/i)).toBeInTheDocument();
     });
   });
 
   describe('Error Handling', () => {
-    it('displays error message on API failure', async () => {
+    it('shows a not-found message for a 404 response', async () => {
       const user = userEvent.setup();
-      vi.mocked(voterService.verifyVote).mockRejectedValueOnce({
-        response: { data: { message: 'Receipt hash not found' } },
+      vi.mocked(electionPlayerService.verifyVote).mockRejectedValueOnce({
+        response: { status: 404, data: { error: 'Vote not found' } },
       });
 
       renderWithRouter(<Verify />);
+      await fillAndSubmit(user);
 
-      await user.type(screen.getByPlaceholderText(/enter your receipt hash/i), 'nonexistent-hash');
-      await user.click(screen.getByRole('button', { name: /verify vote/i }));
-
-      await waitFor(() => {
-        expect(screen.getByText(/receipt hash not found/i)).toBeInTheDocument();
-      });
+      expect(await screen.findByText(/no ballot was found/i)).toBeInTheDocument();
     });
 
-    it('displays generic error on network failure', async () => {
+    it('shows a generic error message on network failure', async () => {
       const user = userEvent.setup();
-      vi.mocked(voterService.verifyVote).mockRejectedValueOnce(new Error('Network error'));
+      vi.mocked(electionPlayerService.verifyVote).mockRejectedValueOnce(new Error('Network error'));
 
       renderWithRouter(<Verify />);
+      await fillAndSubmit(user);
 
-      await user.type(screen.getByPlaceholderText(/enter your receipt hash/i), 'any-hash');
-      await user.click(screen.getByRole('button', { name: /verify vote/i }));
-
-      await waitFor(() => {
-        expect(screen.getByText(/failed to verify vote/i)).toBeInTheDocument();
-      });
+      expect(await screen.findByText(/could not reach the verification service/i)).toBeInTheDocument();
     });
   });
 
   describe('Loading State', () => {
-    it('shows loading state during verification', async () => {
+    it('shows a loading state during verification', async () => {
       const user = userEvent.setup();
-      vi.mocked(voterService.verifyVote).mockImplementation(
-        () => new Promise((resolve) => setTimeout(resolve, 100))
+      vi.mocked(electionPlayerService.verifyVote).mockImplementation(
+        () => new Promise(() => {}) // never resolves within the test
       );
 
       renderWithRouter(<Verify />);
+      await user.type(screen.getByLabelText(/election id/i), 'election-1');
+      await user.type(screen.getByLabelText(/receipt hash/i), 'receipt-hash-abc');
+      await user.click(screen.getByRole('button', { name: /^verify$/i }));
 
-      await user.type(screen.getByPlaceholderText(/enter your receipt hash/i), 'test-hash');
-      await user.click(screen.getByRole('button', { name: /verify vote/i }));
-
-      expect(screen.getByRole('button', { name: /verifying/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /verifying/i })).toBeDisabled();
-    });
-  });
-
-  describe('Privacy Notice', () => {
-    it('shows informative text after input', async () => {
-      renderWithRouter(<Verify />);
-
-      expect(screen.getByText(/this was provided when you cast your vote/i)).toBeInTheDocument();
     });
   });
 });
