@@ -1,8 +1,10 @@
 /**
  * Real, end-to-end, adversarial tests for the ballot submission protocol
  * added in Milestone 1 (backend/src/routes/ballot.ts,
- * backend/src/routes/finalization.ts). No mocking - real Postgres, real
- * Groth16 proofs, real HTTP requests via supertest against the actual app.
+ * backend/src/routes/finalization.ts) and the anonymous eligibility flow
+ * added in Milestone 2 (backend/src/routes/eligibility.ts,
+ * circuits/eligibility.circom). No mocking - real Postgres, real Groth16
+ * proofs, real HTTP requests via supertest against the actual app.
  *
  * Per docs/protocol.md and the project's "attack the protocol, not merely
  * the functions" testing goal: every adversarial case here must produce a
@@ -23,6 +25,8 @@ let candidateBId: string;
 
 async function cleanup() {
   await prisma.vote.deleteMany({ where: { election: { name: { startsWith: PREFIX } } } });
+  await prisma.nullifier.deleteMany({ where: { election: { name: { startsWith: PREFIX } } } });
+  await prisma.eligibilityCommitment.deleteMany({ where: { election: { name: { startsWith: PREFIX } } } });
   await prisma.challengeNonce.deleteMany({ where: { election: { name: { startsWith: PREFIX } } } });
   await prisma.electionFinalization.deleteMany({ where: { election: { name: { startsWith: PREFIX } } } });
   await prisma.ledgerEntry.deleteMany({ where: { election: { name: { startsWith: PREFIX } } } });
@@ -35,7 +39,9 @@ async function cleanup() {
   await prisma.organization.deleteMany({ where: { name: { startsWith: PREFIX } } });
 }
 
-async function setupElection(status: string) {
+// Always created in REGISTRATION so eligibility enrollment (only allowed
+// pre-VOTING) can run in setup; callers that need VOTING call openVoting().
+async function setupElection() {
   const org = await prisma.organization.create({
     data: {
       name: `${PREFIX}org-${Date.now()}-${Math.random()}`,
@@ -55,6 +61,9 @@ async function setupElection(status: string) {
   const member2 = await prisma.member.create({
     data: { organizationId: orgId, externalId: 'voter-2', isActive: true },
   });
+  const member3 = await prisma.member.create({
+    data: { organizationId: orgId, externalId: 'voter-3', isActive: true },
+  });
 
   const electionKeyPair = crypto.generateElectionKeyPair();
   const signingKeyPair = crypto.generateKeyPair();
@@ -67,7 +76,7 @@ async function setupElection(status: string) {
       type: 'PROJECT',
       startDate: new Date(Date.now() - 60_000),
       endDate: new Date(Date.now() + 60_000),
-      status,
+      status: 'REGISTRATION',
       publicKey: electionKeyPair.publicKey,
       privateKeyHash: crypto.hashVotingToken(electionKeyPair.privateKey),
       privateKey: electionKeyPair.privateKey,
@@ -96,6 +105,11 @@ async function setupElection(status: string) {
   });
   await prisma.snapshotMember.create({ data: { snapshotId: snapshot.id, memberId: member.id } });
   await prisma.snapshotMember.create({ data: { snapshotId: snapshot.id, memberId: member2.id } });
+  await prisma.snapshotMember.create({ data: { snapshotId: snapshot.id, memberId: member3.id } });
+}
+
+async function openVoting() {
+  await prisma.election.update({ where: { id: electionId }, data: { status: 'VOTING' } });
 }
 
 async function registerAndGetToken(externalId = 'voter-1') {
@@ -105,19 +119,36 @@ async function registerAndGetToken(externalId = 'voter-1') {
   return res;
 }
 
-async function getChallenge() {
-  const res = await request(app).get(`/api/elections/${electionId}/challenge`);
-  return res.body.challenge as string;
+// Registers a voter (if not given an existing token) and enrolls a fresh
+// eligibility credential for them, authenticated by their token hash.
+// Returns the secret needed to later prove membership anonymously.
+async function registerAndEnroll(externalId = 'voter-1', votingToken?: string) {
+  if (!votingToken) {
+    const reg = await registerAndGetToken(externalId);
+    if (reg.status !== 201) throw new Error(`registration failed: ${reg.status} ${JSON.stringify(reg.body)}`);
+    votingToken = reg.body.votingToken;
+  }
+  const votingTokenHash = crypto.hashVotingToken(votingToken!);
+  const { secret, commitment } = await crypto.generateEligibilityCredential();
+  const res = await request(app)
+    .post(`/api/elections/${electionId}/eligibility/enroll`)
+    .send({ votingTokenHash, commitment });
+  return { res, secret, commitment, votingToken: votingToken! };
 }
 
-async function proveAndVote(votingToken: string, candidateId: string) {
-  const challenge = await getChallenge();
-  const commitment = await crypto.computeTokenCommitment(votingToken);
-  const proof = await crypto.generateTokenValidityProof(votingToken, challenge);
+async function buildEligibilityProof(secret: string, commitment: string) {
+  const pathRes = await request(app).get(`/api/elections/${electionId}/eligibility/path`).query({ commitment });
+  if (pathRes.status !== 200) throw new Error(`path lookup failed: ${pathRes.status} ${JSON.stringify(pathRes.body)}`);
+  const { root, pathElements, pathIndices } = pathRes.body;
+  return crypto.generateEligibilityProof(secret, electionId, root, pathElements, pathIndices);
+}
+
+async function proveAndVote(secret: string, commitment: string, candidateId: string) {
+  const eligibilityProof = await buildEligibilityProof(secret, commitment);
   const res = await request(app)
     .post(`/api/elections/${electionId}/vote`)
-    .send({ votingToken, candidateId, challenge, tokenValidityProof: proof });
-  return { res, challenge, commitment, proof };
+    .send({ candidateId, eligibilityProof });
+  return { res, eligibilityProof };
 }
 
 describe('Ballot protocol (real, adversarial)', () => {
@@ -132,7 +163,7 @@ describe('Ballot protocol (real, adversarial)', () => {
 
   describe('registration', () => {
     beforeAll(async () => {
-      await setupElection('VOTING');
+      await setupElection();
     });
 
     it('rejects registration for someone not in the electorate snapshot', async () => {
@@ -155,93 +186,136 @@ describe('Ballot protocol (real, adversarial)', () => {
     });
   });
 
+  describe('eligibility enrollment', () => {
+    beforeAll(async () => {
+      await cleanup();
+      await setupElection();
+    }, 30000);
+
+    it('rejects enrollment with an unknown token hash', async () => {
+      const { commitment } = await crypto.generateEligibilityCredential();
+      const res = await request(app)
+        .post(`/api/elections/${electionId}/eligibility/enroll`)
+        .send({ votingTokenHash: crypto.hashVotingToken('never-registered'), commitment });
+      expect(res.status).toBe(403);
+    });
+
+    it('enrolls a registered voter and publishes a new root', async () => {
+      const { res } = await registerAndEnroll('voter-1');
+      expect(res.status).toBe(201);
+      expect(res.body.eligibilityRoot).toBeTruthy();
+
+      const election = await prisma.election.findUnique({ where: { id: electionId } });
+      expect(election?.eligibilityRoot).toBe(res.body.eligibilityRoot);
+    }, 30000);
+
+    it('rejects enrolling the same commitment twice', async () => {
+      const { secret } = await crypto.generateEligibilityCredential();
+      const commitment = await crypto.computeEligibilityCommitment(secret);
+      const reg = await registerAndGetToken('voter-2');
+      const votingTokenHash = crypto.hashVotingToken(reg.body.votingToken);
+
+      const first = await request(app)
+        .post(`/api/elections/${electionId}/eligibility/enroll`)
+        .send({ votingTokenHash, commitment });
+      expect(first.status).toBe(201);
+
+      const second = await request(app)
+        .post(`/api/elections/${electionId}/eligibility/enroll`)
+        .send({ votingTokenHash, commitment });
+      expect(second.status).toBe(409);
+    }, 30000);
+
+    it('rejects enrollment once voting has opened', async () => {
+      // registration itself stays open through VOTING (rolling
+      // registration); only eligibility enrollment closes once voting
+      // opens, since the tree must be stable once proofs are being checked
+      // against it.
+      const reg = await registerAndGetToken('voter-3');
+      expect(reg.status).toBe(201);
+      await openVoting();
+
+      const { secret, commitment } = await crypto.generateEligibilityCredential();
+      const res = await request(app)
+        .post(`/api/elections/${electionId}/eligibility/enroll`)
+        .send({ votingTokenHash: crypto.hashVotingToken(reg.body.votingToken), commitment });
+      expect(res.status).toBe(409);
+      void secret;
+    }, 30000);
+  });
+
   describe('real vote casting and protocol attacks', () => {
-    let votingToken: string;
+    let secret: string;
+    let commitment: string;
+    let secret3: string;
+    let commitment3: string;
 
     beforeAll(async () => {
       await cleanup();
-      await setupElection('VOTING');
-      const reg = await registerAndGetToken('voter-1');
-      votingToken = reg.body.votingToken;
+      await setupElection();
+      // Enroll everyone this block needs *before* opening voting -
+      // enrollment (unlike registration) closes once voting starts.
+      const enrolled = await registerAndEnroll('voter-1');
+      expect(enrolled.res.status).toBe(201);
+      secret = enrolled.secret;
+      commitment = enrolled.commitment;
+
+      const enrolled3 = await registerAndEnroll('voter-3');
+      expect(enrolled3.res.status).toBe(201);
+      secret3 = enrolled3.secret;
+      commitment3 = enrolled3.commitment;
+
+      await openVoting();
     }, 30000);
 
-    it('casts a real vote with a real Groth16 proof', async () => {
-      const { res } = await proveAndVote(votingToken, candidateAId);
+    it('casts a real vote with a real Groth16 eligibility proof', async () => {
+      const { res } = await proveAndVote(secret, commitment, candidateAId);
       expect(res.status).toBe(201);
       expect(res.body.receipt.receiptHash).toBeTruthy();
       expect(res.body.receipt.merkleRoot).toBeTruthy();
 
-      const voter = await prisma.voter.findFirst({ where: { electionId } });
-      expect(voter?.hasVoted).toBe(true);
+      const nullifierCount = await prisma.nullifier.count({ where: { electionId } });
+      expect(nullifierCount).toBe(1);
     }, 30000);
 
-    it('rejects a second vote from the same credential (double-vote)', async () => {
-      const { res } = await proveAndVote(votingToken, candidateBId);
+    it('rejects a second vote from the same credential (nullifier reuse)', async () => {
+      const { res } = await proveAndVote(secret, commitment, candidateBId);
       expect(res.status).toBe(409);
     }, 30000);
 
-    it('rejects reusing an already-consumed challenge', async () => {
-      const challenge = await getChallenge();
-      const proof = await crypto.generateTokenValidityProof(votingToken, challenge);
-
-      // Consume it once via a vote attempt (will fail on double-vote, but
-      // that happens *after* challenge consumption in the route, so the
-      // challenge itself is burned either way for this test's purpose -
-      // instead, directly mark it consumed to isolate the challenge-reuse
-      // check from the double-vote check.)
-      await prisma.challengeNonce.update({ where: { challenge }, data: { consumedAt: new Date() } });
-
+    it('rejects a proof built against a stale eligibility root', async () => {
+      // Simulate the root having moved on since this proof was built (e.g.
+      // a revocation) - a proof valid against an old root must not verify
+      // against the current one.
+      const eligibilityProof = await buildEligibilityProof(secret, commitment);
+      const realRoot = eligibilityProof.publicInputs[1];
+      await prisma.election.update({ where: { id: electionId }, data: { eligibilityRoot: 'attacker-cannot-just-change-this-and-have-old-proofs-match' } });
       const res = await request(app)
         .post(`/api/elections/${electionId}/vote`)
-        .send({ votingToken, candidateId: candidateAId, challenge, tokenValidityProof: proof });
-      expect(res.status).toBe(409);
-      expect(res.body.error).toMatch(/already used/i);
-    }, 30000);
-
-    it('rejects an unknown challenge never issued by the server', async () => {
-      const fakeChallenge = crypto.generateChallenge();
-      const proof = await crypto.generateTokenValidityProof(votingToken, fakeChallenge);
-      const res = await request(app)
-        .post(`/api/elections/${electionId}/vote`)
-        .send({ votingToken, candidateId: candidateAId, challenge: fakeChallenge, tokenValidityProof: proof });
-      expect(res.status).toBe(400);
-    }, 30000);
-
-    it('rejects a proof generated for a different token than the one submitted', async () => {
-      // Uses a second, still-unspent registered voter (voter-2) rather than
-      // the shared `votingToken` from beforeAll, which already voted in an
-      // earlier test in this block - reusing it here would hit the
-      // already-voted check before proof verification even runs, testing
-      // the wrong thing.
-      const reg2 = await registerAndGetToken('voter-2');
-      expect(reg2.status).toBe(201);
-      const votingToken2 = reg2.body.votingToken;
-
-      const challenge = await getChallenge();
-      const otherToken = crypto.generateVotingToken();
-      const wrongProof = await crypto.generateTokenValidityProof(otherToken, challenge);
-      const res = await request(app)
-        .post(`/api/elections/${electionId}/vote`)
-        .send({ votingToken: votingToken2, candidateId: candidateAId, challenge, tokenValidityProof: wrongProof });
+        .send({ candidateId: candidateAId, eligibilityProof });
       expect(res.status).toBe(403);
+
+      await prisma.election.update({ where: { id: electionId }, data: { eligibilityRoot: realRoot } });
     }, 30000);
 
-    it('rejects an unregistered/unknown voting token', async () => {
-      const challenge = await getChallenge();
-      const unknownToken = crypto.generateVotingToken();
-      const proof = await crypto.generateTokenValidityProof(unknownToken, challenge);
-      const res = await request(app)
-        .post(`/api/elections/${electionId}/vote`)
-        .send({ votingToken: unknownToken, candidateId: candidateAId, challenge, tokenValidityProof: proof });
-      expect(res.status).toBe(403);
+    it('rejects a proof for a credential that was never enrolled', async () => {
+      const { secret: strangerSecret } = await crypto.generateEligibilityCredential();
+      const election = await prisma.election.findUnique({ where: { id: electionId } });
+      // Build a proof using a path for a *different*, real, enrolled leaf,
+      // but swap in the stranger's own secret - the leaf hash in the proof
+      // won't match what the path was issued for, so the Merkle constraint
+      // in the circuit itself must fail to produce a valid proof/witness.
+      const pathRes = await request(app).get(`/api/elections/${electionId}/eligibility/path`).query({ commitment });
+      await expect(
+        crypto.generateEligibilityProof(strangerSecret, electionId, election!.eligibilityRoot!, pathRes.body.pathElements, pathRes.body.pathIndices)
+      ).rejects.toBeTruthy();
     }, 30000);
 
     it('rejects a candidateId that does not belong to this election', async () => {
-      const challenge = await getChallenge();
-      const proof = await crypto.generateTokenValidityProof(votingToken, challenge);
+      const eligibilityProof = await buildEligibilityProof(secret3, commitment3);
       const res = await request(app)
         .post(`/api/elections/${electionId}/vote`)
-        .send({ votingToken, candidateId: 'not-a-real-candidate-id', challenge, tokenValidityProof: proof });
+        .send({ candidateId: 'not-a-real-candidate-id', eligibilityProof });
       expect(res.status).toBe(400);
     }, 30000);
   });
@@ -249,31 +323,28 @@ describe('Ballot protocol (real, adversarial)', () => {
   describe('voting outside the open window', () => {
     beforeAll(async () => {
       await cleanup();
-      await setupElection('DRAFT');
+      await setupElection();
     });
 
     it('rejects a vote when the election is not in VOTING status', async () => {
-      const reg = await registerAndGetToken('voter-1');
-      // registration itself is allowed pre-open (DRAFT), but voting is not
-      expect(reg.status).toBe(201);
-      const challenge = await getChallenge();
-      const proof = await crypto.generateTokenValidityProof(reg.body.votingToken, challenge);
+      const enrolled = await registerAndEnroll('voter-1');
+      expect(enrolled.res.status).toBe(201);
+      // election is still REGISTRATION, never opened to VOTING
+      const eligibilityProof = await buildEligibilityProof(enrolled.secret, enrolled.commitment);
       const res = await request(app)
         .post(`/api/elections/${electionId}/vote`)
-        .send({ votingToken: reg.body.votingToken, candidateId: candidateAId, challenge, tokenValidityProof: proof });
+        .send({ candidateId: candidateAId, eligibilityProof });
       expect(res.status).toBe(409);
     }, 30000);
   });
 
   describe('finalization', () => {
-    let votingToken: string;
-
     beforeAll(async () => {
       await cleanup();
-      await setupElection('VOTING');
-      const reg = await registerAndGetToken('voter-1');
-      votingToken = reg.body.votingToken;
-      await proveAndVote(votingToken, candidateAId);
+      await setupElection();
+      const enrolled = await registerAndEnroll('voter-1');
+      await openVoting();
+      await proveAndVote(enrolled.secret, enrolled.commitment, candidateAId);
     }, 30000);
 
     it('produces a signed manifest that verifies', async () => {

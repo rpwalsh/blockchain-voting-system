@@ -677,10 +677,10 @@ model TrusteeDecryptionShare {
   electionId         String
   candidateId        String
   trusteeIndex       Int      // x-coordinate of this trustee's Shamir share
-  partialDecryption  String   // EC point (compressed hex)
-  proofCommitmentA   String   // Chaum-Pedersen proof component
-  proofCommitmentB   String
-  proofResponse      String
+  partialDecryption  String   // JSON ECPointHex {x,y}
+  proofCommitmentA   String   // JSON ECPointHex {x,y}
+  proofCommitmentB   String   // JSON ECPointHex {x,y}
+  proofResponse      String   // hex scalar
   submittedAt        DateTime @default(now())
 
   election Election @relation(fields: [electionId], references: [id], onDelete: Cascade)

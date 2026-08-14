@@ -49,6 +49,37 @@ challenge before the pairing check is a cheap, honest short-circuit - it
 doesn't weaken the proof, since the pairing check would reject those cases
 anyway once you're comparing against the caller's expected values.
 
+## `eligibility` circuit
+
+Proves membership of a secret credential in the election's eligibility
+Merkle tree (20 levels, Poseidon(2) per node) without revealing which
+leaf, and outputs a nullifier = Poseidon(secret, electionId) so a double
+vote in the same election reuses the same nullifier and gets rejected,
+while the same voter's nullifier differs across elections. This is what
+backs `generateEligibilityProof`/`verifyEligibilityProof`/
+`computeEligibilityCommitment`/`PoseidonMerkleTree` in `src/crypto/engine.ts`.
+
+Source: `eligibility.circom`. Circuit stats: 5407 non-linear + 6028 linear
+constraints, 2 public inputs (`merkleRoot`, `electionId`), 1 output
+(`nullifier`), 42 private inputs (`secret`, `salt`, 20 `pathElements`, 20
+`pathIndices`).
+
+```
+public inputs:  merkleRoot, electionId
+private inputs: secret, salt, pathElements[20], pathIndices[20]
+outputs:        nullifier
+```
+
+Larger than `token_validity`, so it has its own Powers of Tau ceremony
+(`pot14_final.ptau`, 2^14 constraints) rather than reusing `pot12_final.ptau`.
+Regenerated the same way as `token_validity` (see below), substituting
+`eligibility` for the circuit name and `14` for the ptau power.
+
+Each circuit's verification key is exported to its own
+`<circuit>_verification_key.json` rather than a single shared file -
+`verifyZKProof` takes a `circuit` parameter and loads
+`build/${circuit}_verification_key.json` accordingly.
+
 ## Build artifacts (`build/`)
 
 These are committed to the repo (see the `!backend/circuits/build/`
@@ -134,6 +165,9 @@ commitment/challenge, that it's rejected against the wrong token
 commitment, rejected against a stale challenge, rejected when tampered, and
 that the nullifier differs across challenges for the same token (replay
 protection).
+
+`eligibility` is likewise real and end-to-end - see
+`src/__tests__/e2e/eligibility.test.ts`.
 
 `vote-validity` has no compiled circuit yet. `generateVoteValidityProof`
 falls back to a Fiat-Shamir-style commitment in that case - it's labeled

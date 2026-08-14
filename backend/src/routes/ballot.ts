@@ -1,9 +1,17 @@
 /**
  * Ballot submission protocol - see docs/protocol.md.
  *
- * Real, enforced HTTP flow for voter registration, challenge issuance, and
- * ballot casting, with real nullifier-based replay protection via the
- * token_validity Groth16 circuit.
+ * Registration (identified, via externalId) issues a token used only to
+ * authenticate eligibility-commitment enrollment (routes/eligibility.ts) -
+ * not to vote directly. Voting itself uses an anonymous eligibility proof
+ * (circuits/eligibility.circom): the server verifies Merkle membership and
+ * checks the proof's nullifier hasn't been spent, without ever learning
+ * which enrolled voter this is.
+ *
+ * The GET /challenge endpoint and token_validity-based proof are no longer
+ * part of the voting path (they authenticated a *specific* voter, which is
+ * exactly the anonymity property Milestone 2 exists to remove) - left in
+ * place as still-real, still-tested infrastructure rather than deleted.
  *
  * Honest scope note (see docs/cryptography.md): `candidateId` is still
  * accepted and stored in the clear on the Vote row, matching how tallying
@@ -11,8 +19,8 @@
  * from the server's own database - that requires the real cryptographic
  * tally (Milestone 3), not just an enforced submission endpoint. What this
  * endpoint *does* provide for real: proof-gated, replay-protected,
- * one-vote-per-credential ballot acceptance, appended to a signed,
- * hash-chained ledger and a domain-separated Merkle tree.
+ * one-vote-per-credential, anonymous ballot acceptance, appended to a
+ * signed, hash-chained ledger and a domain-separated Merkle tree.
  */
 
 import { Router, Request, Response } from 'express';
@@ -20,6 +28,7 @@ import { prisma } from '../db';
 import crypto, { MerkleTree } from '../crypto/engine';
 import { domainHash, domainHashRaw, DOMAIN } from '../crypto/canonical';
 import { createLedgerEntry } from '../utils/audit';
+import tallyLib from '../crypto/tally';
 
 const router = Router();
 
@@ -147,19 +156,28 @@ router.get('/:electionId/challenge', async (req: Request, res: Response) => {
 
 /**
  * POST /api/elections/:electionId/vote
- * Cast a ballot. See docs/protocol.md, "Stage: Ballot submission" for the
- * full spec this implements, and the file-level comment above for what's
- * real vs. not yet (candidateId is still visible to the server).
+ * Cast a ballot using an anonymous eligibility proof (see
+ * circuits/eligibility.circom, routes/eligibility.ts) rather than a
+ * per-voter token proof - the server verifies membership in the
+ * eligibility set and checks the proof's nullifier hasn't been spent,
+ * without ever looking up which enrolled voter this is. This closes the
+ * anonymity gap the old token-based flow had: that flow looked up "voter
+ * by token hash" *before* verifying anything, so the server always knew
+ * who was voting regardless of the proof.
+ *
+ * Honest scope note (see docs/cryptography.md): `candidateId` is still
+ * accepted and stored in the clear on the Vote row pending Milestone 3's
+ * homomorphic tally.
  */
 router.post('/:electionId/vote', async (req: Request, res: Response) => {
   try {
     const { electionId } = req.params;
-    const { votingToken, candidateId, challenge, tokenValidityProof } = req.body || {};
+    const { candidateId, eligibilityProof } = req.body || {};
 
-    if (!votingToken || !candidateId || !challenge || !tokenValidityProof) {
+    if (!candidateId || !eligibilityProof) {
       return res.status(400).json({
         success: false,
-        error: 'votingToken, candidateId, challenge, and tokenValidityProof are required',
+        error: 'candidateId and eligibilityProof are required',
       });
     }
 
@@ -171,96 +189,93 @@ router.post('/:electionId/vote', async (req: Request, res: Response) => {
     if (!election.signingPrivateKey) {
       return res.status(500).json({ success: false, error: 'Election has no signing keypair configured' });
     }
+    if (!election.eligibilityRoot) {
+      return res.status(500).json({ success: false, error: 'Election has no eligibility root configured' });
+    }
 
     const candidate = await prisma.candidate.findFirst({ where: { id: candidateId, electionId } });
     if (!candidate) {
       return res.status(400).json({ success: false, error: 'candidateId is not a valid candidate for this election' });
     }
 
-    // Challenge must have been issued by this server for this election and
-    // not already consumed - the core of real (not just claimed) replay
-    // protection.
-    const nonce = await prisma.challengeNonce.findUnique({ where: { challenge } });
-    if (!nonce || nonce.electionId !== electionId) {
-      return res.status(400).json({ success: false, error: 'Unknown challenge' });
-    }
-    if (nonce.consumedAt) {
-      return res.status(409).json({ success: false, error: 'Challenge already used' });
-    }
-    if (nonce.expiresAt < new Date()) {
-      return res.status(400).json({ success: false, error: 'Challenge expired' });
+    // Real Groth16 verification: proves the caller knows a credential that
+    // is a member of the eligibility tree at election.eligibilityRoot,
+    // without revealing which leaf. Returns the proof's nullifier only if
+    // the proof actually verifies.
+    const nullifier = await crypto.verifyEligibilityProof(eligibilityProof, election.eligibilityRoot, electionId);
+    if (!nullifier) {
+      return res.status(403).json({ success: false, error: 'Eligibility proof did not verify' });
     }
 
-    const votingTokenHash = crypto.hashVotingToken(votingToken);
-    const voter = await prisma.voter.findUnique({ where: { votingTokenHash } });
-    if (!voter || voter.electionId !== electionId) {
-      return res.status(403).json({ success: false, error: 'Unknown voting token for this election' });
-    }
-    if (voter.hasVoted) {
-      return res.status(409).json({ success: false, error: 'This credential has already voted' });
-    }
-    if (!voter.tokenCommitment) {
-      return res.status(500).json({ success: false, error: 'Voter record missing token commitment' });
-    }
-
-    // Real Groth16 verification: proves the caller knows a token matching
-    // the commitment on file, bound to this specific (unconsumed) challenge.
-    const proofValid = await crypto.verifyTokenValidityProof(tokenValidityProof, voter.tokenCommitment, challenge);
-    if (!proofValid) {
-      return res.status(403).json({ success: false, error: 'Token validity proof did not verify' });
-    }
-
-    // Consume the challenge before doing anything else - a failure past
-    // this point must not leave a reusable challenge behind.
-    await prisma.challengeNonce.update({ where: { challenge }, data: { consumedAt: new Date() } });
-
+    const orderedCandidates = await prisma.candidate.findMany({ where: { electionId }, orderBy: { order: 'asc' }, select: { id: true } });
     const encryptedVote = crypto.encryptVote(candidateId, election.publicKey);
     const voteValidityProofJson = await crypto.generateVoteValidityProof(
       encryptedVote,
-      (await prisma.candidate.findMany({ where: { electionId }, select: { id: true } })).map(c => c.id)
+      orderedCandidates.map(c => c.id)
     );
 
-    const receiptHash = crypto.createReceiptHash(JSON.stringify({ electionId, votingTokenHash, timestamp: Date.now() }));
-    const ledgerEntryHash = domainHashRaw(DOMAIN.ELECTION_BALLOT, receiptHash + ':' + votingTokenHash);
+    // Homomorphic tally ciphertext (Milestone 3, see crypto/tally.ts) - one
+    // EC ElGamal encryption of 0/1 per candidate, one-hot at this voter's
+    // choice, summed and threshold-decrypted at tally time without any
+    // ballot ever being individually decrypted. Only populated once the
+    // election has a tally keypair configured.
+    let tallyCiphertextsJson: string | null = null;
+    if (election.tallyPublicKey) {
+      const choiceIndex = orderedCandidates.findIndex(c => c.id === candidateId);
+      const tallyPublicKey = JSON.parse(election.tallyPublicKey);
+      const oneHot = tallyLib.encryptOneHot(choiceIndex, orderedCandidates.length, tallyPublicKey);
+      tallyCiphertextsJson = JSON.stringify(
+        orderedCandidates.map((c, i) => ({ candidateId: c.id, ciphertext: oneHot[i] }))
+      );
+    }
 
-    const result = await prisma.$transaction(async tx => {
-      const updated = await tx.voter.updateMany({
-        where: { id: voter.id, hasVoted: false },
-        data: { hasVoted: true, votedAt: new Date(), voteReceiptHash: receiptHash },
+    const receiptHash = crypto.createReceiptHash(JSON.stringify({ electionId, nullifier, timestamp: Date.now() }));
+    const ledgerEntryHash = domainHashRaw(DOMAIN.ELECTION_BALLOT, receiptHash + ':' + nullifier);
+
+    let result;
+    try {
+      result = await prisma.$transaction(async tx => {
+        // Spending the nullifier is what enforces one vote per credential -
+        // the unique constraint makes a double-vote attempt fail atomically
+        // rather than racing a separate read-then-write check.
+        await tx.nullifier.create({ data: { electionId, nullifier } });
+
+        const existingVotes = await tx.vote.findMany({
+          where: { electionId },
+          orderBy: { ledgerTimestamp: 'asc' },
+          select: { encryptedVote: true },
+        });
+        const allCiphertexts = [...existingVotes.map(v => v.encryptedVote), JSON.stringify(encryptedVote)];
+        const tree = new MerkleTree(allCiphertexts);
+        const newRoot = tree.getRoot();
+        const proof = tree.getProof(allCiphertexts.length - 1);
+
+        const vote = await tx.vote.create({
+          data: {
+            electionId,
+            candidateId,
+            encryptedVote: JSON.stringify(encryptedVote),
+            votingTokenHash: nullifier, // anonymous path: no per-voter token, nullifier stands in as the uniqueness key
+            eligibilityNullifier: nullifier,
+            tallyCiphertexts: tallyCiphertextsJson,
+            voteProof: voteValidityProofJson,
+            receiptHash,
+            ledgerEntryHash,
+            merkleRoot: newRoot,
+            merkleProof: JSON.stringify(proof),
+          },
+        });
+
+        await tx.election.update({ where: { id: electionId }, data: { merkleRoot: newRoot, lastMerkleUpdate: new Date(), voteCount: { increment: 1 } } });
+
+        return { vote, merkleRoot: newRoot, merkleProof: proof };
       });
-      if (updated.count === 0) {
-        // Lost a race with another concurrent vote using the same credential.
-        throw new Error('DOUBLE_VOTE_RACE');
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        return res.status(409).json({ success: false, error: 'This credential has already voted' });
       }
-
-      const existingVotes = await tx.vote.findMany({
-        where: { electionId },
-        orderBy: { ledgerTimestamp: 'asc' },
-        select: { encryptedVote: true },
-      });
-      const allCiphertexts = [...existingVotes.map(v => v.encryptedVote), JSON.stringify(encryptedVote)];
-      const tree = new MerkleTree(allCiphertexts);
-      const newRoot = tree.getRoot();
-      const proof = tree.getProof(allCiphertexts.length - 1);
-
-      const vote = await tx.vote.create({
-        data: {
-          electionId,
-          candidateId,
-          encryptedVote: JSON.stringify(encryptedVote),
-          votingTokenHash,
-          voteProof: voteValidityProofJson,
-          receiptHash,
-          ledgerEntryHash,
-          merkleRoot: newRoot,
-          merkleProof: JSON.stringify(proof),
-        },
-      });
-
-      await tx.election.update({ where: { id: electionId }, data: { merkleRoot: newRoot, lastMerkleUpdate: new Date(), voteCount: { increment: 1 } } });
-
-      return { vote, merkleRoot: newRoot, merkleProof: proof };
-    });
+      throw error;
+    }
 
     await createLedgerEntry(
       electionId,
@@ -279,9 +294,6 @@ router.post('/:electionId/vote', async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    if (error.message === 'DOUBLE_VOTE_RACE') {
-      return res.status(409).json({ success: false, error: 'This credential has already voted' });
-    }
     return res.status(500).json({ success: false, error: error.message });
   }
 });
