@@ -182,6 +182,18 @@ against a real electorate snapshot. This issued token now only authenticates the
 *next* stage (eligibility credential enrollment) — it is not used to vote directly
 as of Milestone 2; see "Credential issuance" below.
 
+**Optional real-identity proofing:** an organization can configure a real external
+OIDC identity-proofing provider (ID.me, Login.gov, or any standards-compliant IdP -
+`OrganizationAuthProvider` with `purpose: 'VOTER_IDENTITY_VERIFICATION'`,
+`backend/src/routes/voter-identity.ts`). When configured, registration additionally
+requires a completed, unexpired, single-use `VoterIdentityVerification` binding the
+claimed `externalId` to a real verified person (real PKCE OIDC flow - not a stub).
+The unique constraint on `(electionId, providerId, subjectClaim)` stops one verified
+real person from producing eligible registrations under multiple different claimed
+identities. Deployments that don't need external identity-proofing (e.g. an internal
+union/corporate roster) are unaffected - electorate-snapshot membership alone still
+governs when no such provider is configured.
+
 ---
 
 ## Stage: Credential issuance

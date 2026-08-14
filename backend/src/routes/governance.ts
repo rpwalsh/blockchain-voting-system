@@ -30,7 +30,7 @@ const JWT_EXPIRES_IN: SignOptions['expiresIn'] = config.jwtExpiresIn as any;
 
 const oidcClientCache = new Map<string, any>();
 
-async function getOidcClient(provider: any) {
+export async function getOidcClient(provider: any) {
   const cacheKey = `${provider.id}:${provider.updatedAt?.toISOString?.() || String(provider.updatedAt)}`;
   const cached = oidcClientCache.get(cacheKey);
   if (cached) return cached;
@@ -112,6 +112,7 @@ router.get('/sso/oidc/:orgSlug/:providerName/login', async (req: Request, res: R
         organizationId: org.id,
         name: providerName,
         type: 'OIDC',
+        purpose: 'ADMIN_SSO',
         enabled: true,
       },
     });
@@ -180,8 +181,8 @@ router.get('/sso/oidc/callback', async (req: any, res: Response) => {
     }
 
     const provider = await prisma.organizationAuthProvider.findUnique({ where: { id: cookie.providerId } });
-    if (!provider || !provider.enabled) {
-      return res.status(400).json({ success: false, error: 'SSO provider disabled' });
+    if (!provider || !provider.enabled || provider.purpose !== 'ADMIN_SSO') {
+      return res.status(400).json({ success: false, error: 'SSO provider disabled or reconfigured' });
     }
 
     const org = await prisma.organization.findUnique({ where: { id: cookie.orgId } });
@@ -397,6 +398,7 @@ router.post('/org/auth/oidc', requireAuth, requireOrgRole(['ORG_ADMIN']), async 
       emailClaim,
       subjectClaim,
       rolesClaim,
+      purpose,
     } = req.body || {};
 
     if (!name || !issuerUrl || !clientId || !clientSecret || !redirectUri) {
@@ -405,6 +407,9 @@ router.post('/org/auth/oidc', requireAuth, requireOrgRole(['ORG_ADMIN']), async 
         error: 'name, issuerUrl, clientId, clientSecret, redirectUri required',
       });
     }
+    if (purpose && !['ADMIN_SSO', 'VOTER_IDENTITY_VERIFICATION'].includes(purpose)) {
+      return res.status(400).json({ success: false, error: "purpose must be 'ADMIN_SSO' or 'VOTER_IDENTITY_VERIFICATION'" });
+    }
 
     const provider = await prisma.organizationAuthProvider.upsert({
       where: { organizationId_name: { organizationId: orgId, name } },
@@ -412,6 +417,7 @@ router.post('/org/auth/oidc', requireAuth, requireOrgRole(['ORG_ADMIN']), async 
         organizationId: orgId,
         type: 'OIDC',
         name,
+        purpose: purpose || 'ADMIN_SSO',
         issuerUrl,
         clientId,
         clientSecret,
@@ -423,6 +429,7 @@ router.post('/org/auth/oidc', requireAuth, requireOrgRole(['ORG_ADMIN']), async 
         rolesClaim: rolesClaim || null,
       },
       update: {
+        purpose: purpose || undefined,
         issuerUrl,
         clientId,
         clientSecret,
@@ -437,6 +444,7 @@ router.post('/org/auth/oidc', requireAuth, requireOrgRole(['ORG_ADMIN']), async 
         id: true,
         type: true,
         name: true,
+        purpose: true,
         enabled: true,
         issuerUrl: true,
         clientId: true,

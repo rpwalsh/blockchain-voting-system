@@ -83,6 +83,28 @@ router.post('/:electionId/voters/register', async (req: Request, res: Response) 
       return res.status(403).json({ success: false, error: 'externalId is not in this election\'s electorate snapshot' });
     }
 
+    // If the org has configured a real-identity-proofing provider (ID.me,
+    // Login.gov, etc - see routes/voter-identity.ts), registration also
+    // requires a completed, unexpired, unconsumed verification binding this
+    // exact externalId to a real verified person. Orgs that haven't
+    // configured one (e.g. an internal union/corporate roster) are
+    // unaffected - electorate-snapshot membership alone still governs.
+    const identityProvider = await prisma.organizationAuthProvider.findFirst({
+      where: { organizationId: election.organizationId, purpose: 'VOTER_IDENTITY_VERIFICATION', enabled: true },
+    });
+    let verification: { id: string } | null = null;
+    if (identityProvider) {
+      verification = await prisma.voterIdentityVerification.findFirst({
+        where: { electionId, externalId, providerId: identityProvider.id, consumedAt: null, expiresAt: { gt: new Date() } },
+      });
+      if (!verification) {
+        return res.status(403).json({
+          success: false,
+          error: `This election requires identity verification via ${identityProvider.name} before registering - see GET /voters/verify-identity/start`,
+        });
+      }
+    }
+
     const identityHash = crypto.createIdentityHash(externalId, electionId);
     const existing = await prisma.voter.findUnique({
       where: { electionId_identityHash: { electionId, identityHash } },
@@ -101,16 +123,32 @@ router.post('/:electionId/voters/register', async (req: Request, res: Response) 
       election.signingPrivateKey
     );
 
-    await prisma.voter.create({
-      data: {
-        electionId,
-        identityHash,
-        votingTokenHash,
-        tokenCommitment,
-        publicKey: voterKeyPair.publicKey,
-        registrationProof,
-      },
-    });
+    try {
+      await prisma.$transaction(async tx => {
+        if (verification) {
+          const consumed = await tx.voterIdentityVerification.updateMany({
+            where: { id: verification.id, consumedAt: null },
+            data: { consumedAt: new Date() },
+          });
+          if (consumed.count === 0) throw new Error('VERIFICATION_ALREADY_CONSUMED');
+        }
+        await tx.voter.create({
+          data: {
+            electionId,
+            identityHash,
+            votingTokenHash,
+            tokenCommitment,
+            publicKey: voterKeyPair.publicKey,
+            registrationProof,
+          },
+        });
+      });
+    } catch (error: any) {
+      if (error.message === 'VERIFICATION_ALREADY_CONSUMED') {
+        return res.status(409).json({ success: false, error: 'This identity verification has already been used to register' });
+      }
+      throw error;
+    }
 
     await createLedgerEntry(electionId, 'REGISTRATION', { votingTokenHash }, election.signingPrivateKey);
 
