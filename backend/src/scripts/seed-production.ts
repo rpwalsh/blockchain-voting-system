@@ -1,3 +1,4 @@
+import { requireSeedAdminPassword } from '../utils/seed-credentials';
 /**
  * SPDX-License-Identifier: LicenseRef-Proprietary
  * Copyright (c) 2026 blockchain-voting-system.
@@ -32,6 +33,7 @@ const GEOGRAPHIC_DATA = {
 };
 
 async function main() {
+  const adminPassword = requireSeedAdminPassword();
   console.log('🗳️  PRODUCTION SEED - Trustless Voting Platform\n');
   
   // 1. Create Organization
@@ -62,7 +64,7 @@ async function main() {
   
   // 2. Create Admin User
   console.log('\n👤 Creating admin user...');
-  const adminPassword = 'REDACTED_USE_ENVIRONMENT_VARIABLE'; // Change in production!
+
   const passwordHash = await bcrypt.hash(adminPassword, 12);
   const adminKeyPair = crypto.generateKeyPair();
   
@@ -91,8 +93,6 @@ async function main() {
   });
   console.log(`✅ Admin user created: ${admin.email}`);
   console.log(`   📧 Email: ${admin.email}`);
-  console.log(`   🔑 Password: ${adminPassword}`);
-  console.log(`   ⚠️  CHANGE THIS PASSWORD IN PRODUCTION!`);
   
   // 3. Create Election
   console.log('\n🗳️  Creating election...');
@@ -284,7 +284,6 @@ async function main() {
   console.log('');
   console.log(`👤 Admin Login:`);
   console.log(`   Email: ${admin.email}`);
-  console.log(`   Password: ${adminPassword}`);
   console.log(`   🚨 CHANGE THIS IN PRODUCTION!`);
   console.log('');
   console.log(`🗳️  Election:`);

@@ -3,7 +3,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       POSTGRES_DB: trustless_voting
     ports:
       - '5432:5432'
@@ -16,10 +16,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgresql://postgres:password@db:5432/trustless_voting?schema=public
-      JWT_SECRET: REDACTED_USE_ENVIRONMENT_VARIABLE
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/trustless_voting?schema=public
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
       JWT_EXPIRES_IN: 24h
-      COOKIE_SECRET: REDACTED_USE_ENVIRONMENT_VARIABLE
+      COOKIE_SECRET: ${COOKIE_SECRET:?Set COOKIE_SECRET}
       CORS_ORIGIN: http://localhost:5173
       GOVERNANCE_APP_URL: http://localhost:5173
       TRUST_PROXY: 'true'
